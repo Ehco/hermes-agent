@@ -145,6 +145,21 @@ export const shouldAnchorBeforePrepend = (settled: boolean, target: ThreadScroll
 // still well under the measured 780ms single-jump freeze.
 const BACKFILL_STEP = 290
 
+// Bounded mounted window (see the cutEndIndex derivation below): once the
+// reader has paged past the first page, keep at most this many pages mounted
+// between the window's top edge and the live tail. Auto-paging used to grow
+// the mounted DOM monotonically — every page paged in on the way up stayed
+// mounted forever, and every layout flush, style recalc, and DOM walk scaled
+// with the TOTAL history read rather than with what is on screen (profiled:
+// ~110k DOM nodes at 400 turns; repeated up-scroll passes degraded 2.4-3.2x,
+// with getBoundingClientRect/scrollTo/commit costs dominating).
+const WINDOW_PAGE_CAP = 2
+// Descending readers get the mirror of the top-edge auto-page: within this
+// many viewport heights of the bottom, remount one page of the cut span per
+// scroll event so turns paged through on the way up are still there on the
+// way down (see tryRetractBelow).
+const RETRACT_TRIGGER_VIEWPORTS = 2
+
 // Auto-spent budget pages while a parked reading offset waits for the tree
 // to cover it (see the grow effect). The real bound is the transcript
 // itself; this only stops a truncated-window fetch that never lands from
@@ -416,6 +431,9 @@ interface TurnRowProps {
   group: MessageGroup
   resetKey: string
   virtualized: boolean
+  /** The last mounted row above the cut (see the bounded window): marks the
+   * boundary the descending-reader retraction trigger measures against. */
+  cutBoundary?: boolean
 }
 
 // One turn (or standalone message) of the transcript. memo() is the point:
@@ -440,13 +458,14 @@ interface TurnRowProps {
 // The live tail (newest turns) is exempt: virtualizing a turn whose final
 // size hasn't been remembered yet snaps it to a stale height when it scrolls
 // off, drifting stick-to-bottom up over old turns. See liveTailStart.
-const TurnRow = memo(function TurnRow({ components, group, resetKey, virtualized }: TurnRowProps) {
+const TurnRow = memo(function TurnRow({ components, group, resetKey, virtualized, cutBoundary }: TurnRowProps) {
   return (
     <div
       className={cn(
         'flex min-w-0 flex-col gap-(--conversation-turn-gap) pb-(--conversation-turn-gap)',
         virtualized && '[contain-intrinsic-size:auto_37.5rem] [content-visibility:auto]'
       )}
+      data-cut-boundary={cutBoundary || undefined}
       data-slot="aui_message-group"
     >
       <MessageRenderBoundary resetKey={resetKey}>
@@ -596,6 +615,12 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   // re-runs with fresh state even when no other dependency changed.
   const [restoreGrowTick, setRestoreGrowTick] = useState(0)
   const windowRequestRef = useRef<object | null>(null)
+  // Re-pin anchor for a retraction commit (see tryRetractBelow): unmounting
+  // pages ABOVE the viewport shrinks the tree by their height, and the browser
+  // keeps the numeric scrollTop — the view would jump DOWN by exactly the
+  // removed height. Capture distance-from-bottom at trigger time and re-apply
+  // it in the commit that lands the smaller tree.
+  const retractAnchorRef = useRef<{ fromBottom: number; height: number } | null>(null)
   const windowCommitRef = useRef<string | null>(null)
   const jumpRestoreRef = useRef<(() => void) | null>(null)
   const isRunning = useAuiState(s => s.thread.isRunning)
@@ -659,13 +684,72 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
 
   const hiddenCount = firstVisibleGroupIndex(weightedGroups, renderBudget, fullPage ? MIN_VISIBLE_GROUPS : 0, fullPage)
 
+  // The full-list live tail: never cut into it, so the streaming turn stays
+  // mounted and the true bottom (the anchor every distance-from-bottom
+  // measurement is taken against) never moves.
+  const tailStartFull = useMemo(() => liveTailStart(weightedGroups), [weightedGroups])
+
+  // Bounded mounted window. Paging ("Show earlier" / top-edge auto-page) used
+  // to raise the budget monotonically, so a long read-up session accumulated
+  // every page it had ever mounted. Once the budget exceeds one page, cap the
+  // mounted span at WINDOW_PAGE_CAP pages: the window keeps its top edge at
+  // hiddenCount (which still grows as the reader pages) and hides the rest of
+  // the way down to the live tail. Both edges derive from renderBudget, so
+  // paging slides the whole window up one page per page — nothing new to
+  // track, and the DOM bound holds for the whole session.
+  //
+  // Suspended while a load/restore owns the position: the parked-restore loop
+  // grows the mounted tree until the remembered offset is reachable, which a
+  // capped window would make unreachable. Paging anchors (captured by
+  // anchorBeforePrepend in the same tick that raises the budget) must NOT
+  // suspend it — they are consumed in the commit that lands the taller tree,
+  // and suspending on them would leave the cut disengaged for as long as the
+  // reader keeps paging (measured: mounted DOM grew 902 → 2400 messages over
+  // five page-ups before the descent finally engaged it). Render-phase ref
+  // reads are safe here: every transition that flips them also re-renders
+  // (budget change or restoreGrowTick bump).
+  const cutEngaged = renderBudget > paneBudget && loadSettledRef.current
+
+  const windowCapWeight = paneBudget * WINDOW_PAGE_CAP
+
+  const cutEndIndex = useMemo(() => {
+    if (!cutEngaged) {
+      return null
+    }
+
+    const stop = Math.max(hiddenCount, tailStartFull)
+    let weight = 0
+    let end = hiddenCount
+
+    for (let i = hiddenCount; i < stop; i++) {
+      weight += weightedGroups[i].weight
+      end = i + 1
+
+      if (weight >= windowCapWeight) {
+        break
+      }
+    }
+
+    // Nothing to hide between the window and the tail (a short transcript, or
+    // the reader paged all the way back down) — the cut is a no-op.
+    return end < tailStartFull ? end : null
+  }, [cutEngaged, hiddenCount, tailStartFull, weightedGroups, windowCapWeight])
+
   // Memoized for IDENTITY, not to save the slice: `rows` below keys off this
   // array, and an inline slice handed it a fresh array every render — so the
   // moment a transcript outgrew the render budget (hiddenCount > 0), every
   // streamed token rebuilt every visible row's JSX and re-rendered the whole
   // mounted transcript. Under the budget the raw `groups` identity made the
   // memo hold; heavy sessions lost it exactly when they could least afford to.
-  const visibleGroups = useMemo(() => (hiddenCount > 0 ? groups.slice(hiddenCount) : groups), [groups, hiddenCount])
+  // With the cut engaged the visible set is the window plus the live tail —
+  // two slices of the same groups array, so per-row identity is unchanged.
+  const visibleGroups = useMemo(() => {
+    if (cutEndIndex == null) {
+      return hiddenCount > 0 ? groups.slice(hiddenCount) : groups
+    }
+
+    return [...groups.slice(hiddenCount, cutEndIndex), ...groups.slice(tailStartFull)]
+  }, [groups, hiddenCount, cutEndIndex, tailStartFull])
 
   // Backfill from FIRST_PAINT_BUDGET to the full budget after the small
   // commit painted — as a TRANSITION, so the heavy markdown + syntax
@@ -717,8 +801,14 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   // groups (render cost, not turns) so the tail is a viewport's worth of content —
   // see liveTailStart. Computed once here rather than per row.
   const tailStart = useMemo(
-    () => liveTailStart(hiddenCount > 0 ? weightedGroups.slice(hiddenCount) : weightedGroups),
-    [weightedGroups, hiddenCount]
+    () =>
+      liveTailStart(
+        // With the cut engaged the visible tail is the full-list tail; without
+        // it, the newest slice the budget keeps — the two agree wherever the
+        // tail fits inside the visible slice.
+        weightedGroups.slice(cutEndIndex == null ? Math.max(hiddenCount, tailStartFull) : tailStartFull)
+      ),
+    [cutEndIndex, hiddenCount, tailStartFull, weightedGroups]
   )
 
   // Secondary windows (new-session scratch, subagent watch, cmd-click pop-out)
@@ -1420,6 +1510,47 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
     [hiddenCount, isAtBottom, olderAvailable, scrollRef, sessionKey, showEarlier, stopScroll]
   )
 
+  // Mirror of the top-edge auto-page: a descending reader crosses the cut
+  // boundary (see the bounded window) — remount one page below the window so
+  // the turns they paged through on the way up are still there on the way
+  // down, instead of vanishing between the window and the live tail. The
+  // remount lands BELOW the viewport, so it cannot shift the reading
+  // position; only the pages unmounted ABOVE it can, and the anchor captured
+  // here re-pins those in the same commit.
+  const tryRetractBelow = useCallback(() => {
+    if (renderBudget <= paneBudget || !loadSettledRef.current || restoreFromBottomRef.current != null) {
+      return
+    }
+
+    const node = scrollRef.current
+    const content = contentRef.current
+
+    if (!node || !content) {
+      return
+    }
+
+    // Distance from the viewport bottom to the cut boundary — the bottom edge
+    // of the last mounted row above the hidden span. Past that edge lie only
+    // hidden turns and the live tail, so this is what "one cushion of reading
+    // left" means regardless of how heavy the hidden turns are; a distance-to-
+    // bottom check would fire only after the reader had already crossed the
+    // whole hidden span.
+    const boundary = content.querySelector('[data-cut-boundary]')
+
+    if (!boundary) {
+      return
+    }
+
+    const distance = boundary.getBoundingClientRect().bottom - (node.scrollTop + node.clientHeight)
+
+    if (distance > node.clientHeight * RETRACT_TRIGGER_VIEWPORTS) {
+      return
+    }
+
+    retractAnchorRef.current = { fromBottom: node.scrollHeight - node.scrollTop, height: node.scrollHeight }
+    setRenderBudget(budget => Math.max(paneBudget, budget - paneBudget))
+  }, [contentRef, paneBudget, renderBudget, scrollRef])
+
   // Scroll/wheel at the top edge pages older turns through the same showEarlier
   // path as the button. Wheel is required because browsers emit no `scroll`
   // once scrollTop is already 0 — exactly where the reader who wants more is.
@@ -1445,7 +1576,11 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
       }
     }
 
-    const onScroll = () => tryShowEarlier()
+    const onScroll = () => {
+      tryShowEarlier()
+      tryRetractBelow()
+    }
+
     const onWheel = (event: WheelEvent) => tryShowEarlier(event.deltaY)
 
     el.addEventListener('scroll', onScroll, { passive: true })
@@ -1455,7 +1590,25 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
       el.removeEventListener('scroll', onScroll)
       el.removeEventListener('wheel', onWheel)
     }
-  }, [hiddenCount, isAtBottom, olderAvailable, scrollRef, showEarlier])
+  }, [contentRef, hiddenCount, isAtBottom, olderAvailable, paneBudget, renderBudget, scrollRef, showEarlier, tryRetractBelow])
+
+  // Consume the retraction anchor in the commit that landed the smaller tree
+  // (see tryRetractBelow). Distance-from-bottom is measured to the true bottom
+  // — the live tail is never cut — so it survives the remount below the
+  // window. A commit that changed nothing (another writer re-rendered) drops
+  // the anchor as a no-op, mirroring the prepend anchor's consumption rule.
+  useLayoutEffect(() => {
+    const anchor = retractAnchorRef.current
+    const el = scrollRef.current
+
+    retractAnchorRef.current = null
+
+    if (!anchor || !el || el.scrollHeight === anchor.height) {
+      return
+    }
+
+    el.scrollTop = Math.max(0, el.scrollHeight - anchor.fromBottom)
+  }, [renderBudget, structuralSignature, scrollRef])
 
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -1545,18 +1698,23 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   // changed (measured live: 865 wasted Block renders in one drag, walked to
   // "MessageRenderBoundary (children only)" by explain()). With it, React
   // bails out on element identity and a scroll flip re-renders nothing below.
+  // Where the retraction trigger should measure: the last window row, whose
+  // bottom edge is the cut boundary (see tryRetractBelow).
+  const boundaryIndex = cutEndIndex == null ? -1 : cutEndIndex - hiddenCount - 1
+
   const rows = useMemo(
     () =>
       visibleGroups.map((group, indexInVisible) => (
         <TurnRow
           components={components}
+          cutBoundary={indexInVisible === boundaryIndex}
           group={group}
           key={group.id}
           resetKey={structuralSignature}
           virtualized={indexInVisible < tailStart}
         />
       )),
-    [visibleGroups, components, structuralSignature, tailStart]
+    [visibleGroups, components, structuralSignature, tailStart, boundaryIndex]
   )
 
   useMessagesBelow({ contentRef, scrollRef, isAtBottom, paneVisible, rows, sessionKey, sessionId: scrollSessionId })
