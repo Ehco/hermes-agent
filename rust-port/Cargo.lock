@@ -356,6 +356,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hermes-schedulers"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "hermes-core",
+ "hermes-skills",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "hermes-session"
 version = "0.1.0"
 dependencies = [
@@ -364,6 +377,17 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "hermes-skills"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hermes-core",
+ "serde",
+ "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]
