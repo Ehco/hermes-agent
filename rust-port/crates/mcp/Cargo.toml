@@ -1,0 +1,18 @@
+[package]
+name = "hermes-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hermes-core = { path = "../core" }
+hermes-tools = { path = "../tools" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "process", "time", "sync"] }
+anyhow = { workspace = true }
+async-trait = "0.1"
+# HTTP/SSE (Streamable HTTP) MCP servers — same shape the Python transport dials.
+reqwest = { workspace = true }
+# Tool-name clamping uses the same digest the Python port does (sha256 hex[:8]).
+sha2 = "0.10"
