@@ -3,12 +3,14 @@ import { useStore } from '@nanostores/react'
 import { atom } from 'nanostores'
 import {
   type ComponentProps,
+  createContext,
   type CSSProperties,
   type FC,
   memo,
   type ReactNode,
   startTransition,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -436,6 +438,60 @@ interface TurnRowProps {
   cutBoundary?: boolean
 }
 
+// Shared per-transcript sync of real row heights into
+// contain-intrinsic-size. content-visibility:auto skips layout of off-screen
+// rows, and with contain-intrinsic-size:auto the browser only remembers a
+// row's size AFTER it has rendered — a row first laid out while its content
+// was still short (mid-stream) keeps that stale remembered height, so every
+// skip/unskip cycle around it snaps the placeholder to a different real
+// height, shifting the whole transcript and fighting native scroll anchoring
+// while the user reads history. Observing each row once and writing its
+// measured border-box height back into contain-intrinsic-size keeps the
+// remembered size == the last real size, so skipping a row changes no height
+// at all. A module-level singleton: rows come and go with the bounded
+// window's cut/retraction, and per-row observer instances would multiply
+// observer overhead by the mounted row count. Rows without the
+// content-visibility class (the live tail) are skipped — their size is
+// already live and the write would be dead work on every streaming resize.
+let rowSizeObserver: ResizeObserver | null = null
+const CV_CLASS = '[content-visibility:auto]'
+
+function getRowSizeObserver(): ResizeObserver | null {
+  if (rowSizeObserver === null && typeof ResizeObserver !== 'undefined') {
+    rowSizeObserver = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const el = entry.target as HTMLElement
+
+        if (!el.classList.contains(CV_CLASS)) {
+          continue
+        }
+
+        const box = entry.borderBoxSize?.[0]
+        const height = box ? box.blockSize : el.offsetHeight
+
+        if (height > 0) {
+          // contain-intrinsic-size changes no live geometry (a visible row
+          // uses its real size), so this write cannot re-trigger the observer
+          // and loop.
+          el.style.containIntrinsicSize = `auto ${Math.round(height)}px`
+        }
+      }
+    })
+  }
+
+  return rowSizeObserver
+}
+
+// Per-list registration surface for the sticky-prompt-clip controller (see
+// useStickyPromptClip). A module-level context: the value is a stable
+// per-instance object, so memo'd rows can consume it without busting their
+// bail-out on every parent render.
+interface RowClipRegistration {
+  register: (el: HTMLElement) => void
+  unregister: (el: HTMLElement) => void
+}
+const RowClipContext = createContext<RowClipRegistration | null>(null)
+
 // One turn (or standalone message) of the transcript. memo() is the point:
 // the rows array below is REBUILT whenever the DOM budget's cut advances
 // (hiddenCount changes its slice), and without per-row bail-out that rebuild
@@ -459,6 +515,35 @@ interface TurnRowProps {
 // size hasn't been remembered yet snaps it to a stale height when it scrolls
 // off, drifting stick-to-bottom up over old turns. See liveTailStart.
 const TurnRow = memo(function TurnRow({ components, group, resetKey, virtualized, cutBoundary }: TurnRowProps) {
+  const clip = useContext(RowClipContext)
+  // State-carried root element: lets one effect own both the clip
+  // registration and the size-sync observation for the row's lifetime,
+  // instead of a callback ref whose identity changes would re-fire the
+  // registration on every boundary flip.
+  const [rootEl, setRootEl] = useState<HTMLElement | null>(null)
+
+  useLayoutEffect(() => {
+    const observer = getRowSizeObserver()
+
+    if (!rootEl) {
+      return undefined
+    }
+
+    clip?.register(rootEl)
+
+    if (virtualized && observer) {
+      observer.observe(rootEl)
+    }
+
+    return () => {
+      clip?.unregister(rootEl)
+
+      if (observer) {
+        observer.unobserve(rootEl)
+      }
+    }
+  }, [rootEl, clip, virtualized])
+
   return (
     <div
       className={cn(
@@ -467,6 +552,7 @@ const TurnRow = memo(function TurnRow({ components, group, resetKey, virtualized
       )}
       data-cut-boundary={cutBoundary || undefined}
       data-slot="aui_message-group"
+      ref={setRootEl}
     >
       <MessageRenderBoundary resetKey={resetKey}>
         {group.kind === 'turn' ? (
@@ -1718,7 +1804,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   )
 
   useMessagesBelow({ contentRef, scrollRef, isAtBottom, paneVisible, rows, sessionKey, sessionId: scrollSessionId })
-  useStickyPromptClip({ contentRef, scrollRef, paneVisible, rows })
+  const rowClip = useStickyPromptClip({ contentRef, scrollRef, paneVisible })
 
   return (
     <div
@@ -1769,7 +1855,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
               {emptyPlaceholder}
             </div>
           ) : (
-            rows
+            <RowClipContext.Provider value={rowClip}>{rows}</RowClipContext.Provider>
           )}
           <PendingApprovalStack />
           {!renderEmpty && loadingIndicator}

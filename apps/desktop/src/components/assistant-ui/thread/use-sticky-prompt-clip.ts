@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, useLayoutEffect, useRef } from 'react'
+import { type RefObject, useLayoutEffect, useMemo, useRef } from 'react'
 
 const GROUP = '[data-slot="aui_message-group"]'
 const PROMPT = '[data-slot="aui_user-message-root"]'
@@ -8,11 +8,10 @@ interface StickyPromptClipOptions {
   contentRef: RefObject<HTMLElement | null>
   scrollRef: RefObject<HTMLElement | null>
   paneVisible: boolean
-  rows: ReactNode
 }
 
 /** Clip covered content instead of painting a solid rectangle over the glass. */
-export function useStickyPromptClip({ contentRef, scrollRef, paneVisible, rows }: StickyPromptClipOptions) {
+export function useStickyPromptClip({ contentRef, scrollRef, paneVisible }: StickyPromptClipOptions) {
   const controller = useRef<ReturnType<typeof observeStickyPromptClip> | null>(null)
 
   useLayoutEffect(() => {
@@ -27,11 +26,28 @@ export function useStickyPromptClip({ contentRef, scrollRef, paneVisible, rows }
 
     if (paneVisible && viewport && content) {
       controller.current ??= observeStickyPromptClip(viewport, content)
-      // Reconcile before paint without tearing down surviving clips when a
-      // stream appends a message or the history window changes its rows.
+      // Full pass only on pane/viewport transitions. Row membership changes are
+      // handled by register()/unregister() from each row's own ref — the old
+      // per-rows reconcile() walked every mounted group (querySelectorAll +
+      // getBoundingClientRect) on every backfill step, paging commit, and
+      // stream append, which scaled the cost of each commit with the size of
+      // the whole mounted transcript.
       controller.current.reconcile()
     }
-  }, [contentRef, scrollRef, paneVisible, rows])
+  }, [contentRef, scrollRef, paneVisible])
+
+  // Stable registration surface for row refs (see TurnRow). The closures read
+  // controller.current at call time, so this object never changes identity
+  // even when the controller is recreated on a pane/viewport swap; a swapped
+  // controller repopulates itself through reconcile() because row effects
+  // don't re-run on the swap.
+  const rowClip = useMemo(
+    () => ({
+      register: (el: HTMLElement) => controller.current?.register(el),
+      unregister: (el: HTMLElement) => controller.current?.unregister(el)
+    }),
+    []
+  )
 
   useLayoutEffect(
     () => () => {
@@ -40,6 +56,8 @@ export function useStickyPromptClip({ contentRef, scrollRef, paneVisible, rows }
     },
     []
   )
+
+  return rowClip
 }
 
 function observeStickyPromptClip(viewport: HTMLElement, content: HTMLElement) {
@@ -205,6 +223,44 @@ function observeStickyPromptClip(viewport: HTMLElement, content: HTMLElement) {
   sizes.observe(content)
   viewport.addEventListener('scroll', schedule, { passive: true })
 
+  // Incremental membership: each TurnRow root registers itself from its own
+  // ref on mount and unregisters on unmount. This replaces the per-rows
+  // reconcile() diff walk (querySelectorAll over every mounted group plus a
+  // bounding check per group on every rows-identity change) with O(1) work per
+  // row transition. IO still delivers real visibility asynchronously; the same
+  // outer-box pre-warm reconcile used keeps a rehomed turn correct before the
+  // first IO delivery.
+  const register = (group: HTMLElement) => {
+    if (observed.has(group)) {
+      return
+    }
+
+    intersections.observe(group)
+    observed.add(group)
+
+    const rect = group.getBoundingClientRect()
+    const viewportRect = viewport.getBoundingClientRect()
+
+    if (rect.bottom > viewportRect.top && rect.top < viewportRect.bottom) {
+      visible.add(group)
+      sizes.observe(group)
+    }
+
+    schedule()
+  }
+
+  const unregister = (group: HTMLElement) => {
+    if (!observed.has(group)) {
+      return
+    }
+
+    intersections.unobserve(group)
+    sizes.unobserve(group)
+    observed.delete(group)
+    visible.delete(group)
+    schedule()
+  }
+
   const dispose = () => {
     intersections.disconnect()
     sizes.disconnect()
@@ -217,5 +273,5 @@ function observeStickyPromptClip(viewport: HTMLElement, content: HTMLElement) {
     }
   }
 
-  return { viewport, content, reconcile, dispose }
+  return { viewport, content, reconcile, register, unregister, dispose }
 }
