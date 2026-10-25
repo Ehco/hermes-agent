@@ -7,12 +7,17 @@
 //! the cli `ToolHost` can treat results opaquely.
 
 pub mod edit;
+pub mod html_text;
+pub mod image_generate;
 pub mod list_dir;
 pub mod read_file;
 pub mod registry;
 pub mod search;
 pub mod terminal;
 pub mod util;
+pub mod web_common;
+pub mod web_extract;
+pub mod web_search;
 pub mod write_file;
 
 /// Re-exported for convenience; the registry owns the ToolSpec list.

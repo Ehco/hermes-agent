@@ -10,7 +10,7 @@ use serde_json::json;
 
 use hermes_core::model::ToolSpec;
 
-use crate::{edit, list_dir, read_file, search, terminal, util, write_file};
+use crate::{edit, image_generate, list_dir, read_file, search, terminal, util, web_extract, web_search, write_file};
 
 pub struct ToolRegistry {
     specs: Vec<ToolSpec>,
@@ -66,6 +66,9 @@ pub fn execute_sync(name: &str, args: &Value) -> String {
         "list_dir" => list_dir::execute(args),
         "search" | "search_files" => search::execute(args),
         "terminal" => terminal::execute(args),
+        "web_search" => web_search::execute(args),
+        "web_extract" => web_extract::execute(args),
+        "image_generate" => image_generate::execute(args),
         other => util::tool_error(format!("Unknown tool: {other}")),
     }
 }
@@ -156,6 +159,56 @@ pub fn specs() -> Vec<ToolSpec> {
                 "required": ["command"]
             }),
         },
+        ToolSpec {
+            name: "web_search".into(),
+            description: "Search the web for information. Returns up to 5 results by default with titles, URLs, and descriptions. The query is passed through to the configured backend, so operators such as site:domain, filetype:pdf, intitle:word, -term, and \"exact phrase\" may work when the backend supports them.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query to look up on the web. You may include backend-supported operators such as site:example.com, filetype:pdf, intitle:word, -term, or \"exact phrase\"."},
+                    "limit": {"type": "integer", "description": "Maximum number of results to return. Defaults to 5.", "minimum": 1, "maximum": 100, "default": 5}
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolSpec {
+            name: "web_extract".into(),
+            description: "Extract content from web page URLs. Returns clean page content in markdown/text (no LLM summarization — fast). Pages within the char budget (default 15000) return whole; larger pages return a head+tail window with a footer telling you the full text's saved file path and the read_file call to page through the omitted middle. Inline images appear as [IMAGE: alt] placeholders; real image URLs are kept as links. If a URL fails or times out, use the browser tool instead.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of URLs to extract content from (max 5 URLs per call)",
+                        "maxItems": 5
+                    },
+                    "char_limit": {
+                        "type": "integer",
+                        "description": "Optional per-page character budget sent back (default 15000). Pages larger than this are head+tail truncated with the full text stored to disk. Raise it when you need more of a long page inline.",
+                        "minimum": 2000
+                    }
+                },
+                "required": ["urls"]
+            }),
+        },
+        ToolSpec {
+            name: "image_generate".into(),
+            description: "Generate high-quality images from text prompts. Returns the result in the `image` field — a URL; reference it in your response using the current platform's file-delivery convention.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "The text prompt describing the desired image (text-to-image). Be detailed and descriptive."},
+                    "aspect_ratio": {
+                        "type": "string",
+                        "enum": ["landscape", "square", "portrait"],
+                        "description": "The aspect ratio of the generated image. 'landscape' is 16:9 wide, 'portrait' is 16:9 tall, 'square' is 1:1.",
+                        "default": "landscape"
+                    }
+                },
+                "required": ["prompt"]
+            }),
+        },
     ]
 }
 
@@ -167,7 +220,7 @@ mod tests {
     #[tokio::test]
     async fn dispatches_by_name() {
         let reg = ToolRegistry::new();
-        assert_eq!(reg.specs().len(), 6);
+        assert_eq!(reg.specs().len(), 9);
 
         let out = reg.dispatch("read_file", &json!({"path": "nonexistent-xyz"})).await;
         assert!(out.contains("error"));
