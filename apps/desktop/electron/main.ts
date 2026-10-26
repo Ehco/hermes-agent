@@ -1,7 +1,8 @@
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 
-import type { GatewayEndpoint } from './local-gateway'
-import { configurePythonGatewayTicketClient, createLocalGatewayDials, createStaleGatewayRestarter, ensureLocalGateway, gatewayOwnerProfile, localGatewayDial, nativeGatewayHttpHeaders, redialLocalGateway, runGatewayEnsure, runGatewayOwnerRestart } from './local-gateway'
+import { resolveAgentBinBackend } from './agent-bin'
+import { type GatewayEndpoint } from './local-gateway'
+import { configurePythonGatewayTicketClient, configureRestGatewayTicketClient, createLocalGatewayDials, createStaleGatewayRestarter, ensureLocalGateway, gatewayOwnerProfile, localGatewayDial, mintRestGatewayTicket, nativeGatewayHttpHeaders, redialLocalGateway, runGatewayEnsure, runGatewayOwnerRestart } from './local-gateway'
 import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
 import { createPluginWsUrlHandler } from './plugin-ws-url'
 const localGatewayDials = createLocalGatewayDials()
@@ -4894,6 +4895,28 @@ function writeDefaultProjectDir(dir) {
 const installedRuntimeGate = createInstalledRuntimeGate(process.env, rememberLog)
 
 async function resolveHermesBackend(backendArgs: string[]): Promise<ResolvedHermesBackend> {
+  // 0. HERMES_AGENT_BIN — an explicit override that launches the Rust gateway
+  //    binary (the Rust port's `hermes-gateway`) instead of any Python
+  //    runtime. The binary speaks the same bounded `gateway ensure --json`
+  //    client protocol (single-line JSON verdict whose endpoint.api_origin is
+  //    the loopback REST + /api/ws origin the UI dials), so owner discovery,
+  //    attach and the socket dial are unchanged. Ticket grants go over the
+  //    gateway's own REST mint because the Python control-socket bridge has
+  //    no owner to answer it. Unset — or not a readable file — keeps the
+  //    Python ladder below completely untouched (zero-risk default).
+  const agentBackend = resolveAgentBinBackend(process.env.HERMES_AGENT_BIN, backendArgs)
+
+  if (agentBackend) {
+    rememberLog(`[backend] using ${agentBackend.label}`)
+    configureRestGatewayTicketClient(mintRestGatewayTicket)
+
+    return agentBackend
+  }
+
+  if (process.env.HERMES_AGENT_BIN) {
+    rememberLog(`[backend] HERMES_AGENT_BIN=${process.env.HERMES_AGENT_BIN} is not a readable file; falling through to the Python runtime ladder`)
+  }
+
   const payload = bundledPayload(process.resourcesPath)
 
   if (payload) {
@@ -5089,6 +5112,8 @@ interface ResolvedHermesBackend {
   env: NodeJS.ProcessEnv
   bootstrap: boolean
   shell: boolean
+  /** HERMES_AGENT_BIN resolved to the Rust gateway: ticket grants go over its REST mint. */
+  rustAgent?: boolean
   local?: string
   root?: string
   ticketCommand?: string

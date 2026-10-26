@@ -528,6 +528,40 @@ export function configurePythonGatewayTicketClient(client: NonNullable<typeof py
   pythonTicketClient = client
 }
 
+/**
+ * HERMES_AGENT_BIN (Rust gateway) ticket mint: the Rust owner serves no Python
+ * control pipe/socket for the bridge above to answer, so tickets are minted
+ * over the gateway's own `POST /api/auth/ws-ticket` — the same endpoint the
+ * Python gateway exposes (`hermes_cli/dashboard_auth/ws_tickets.py`). Enabled
+ * when Desktop resolves the Rust agent (`configureRestGatewayTicketClient`);
+ * every other install keeps the bridge/control-socket paths below untouched.
+ */
+let restTicketClient: ((endpoint: GatewayEndpoint, purpose: GatewayTicketPurpose) => Promise<string>) | undefined
+
+export function configureRestGatewayTicketClient(client?: NonNullable<typeof restTicketClient>) {
+  restTicketClient = client
+}
+
+export async function mintRestGatewayTicket(endpoint: GatewayEndpoint, _purpose: GatewayTicketPurpose): Promise<string> {
+  const res = await fetch(`${endpoint.api_origin}/api/auth/ws-ticket`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}'
+  })
+
+  if (!res.ok) {
+    throw new Error(`Gateway ticket bootstrap failed: POST /api/auth/ws-ticket answered ${res.status}`)
+  }
+
+  const payload = (await res.json()) as { ticket?: unknown }
+
+  if (typeof payload?.ticket !== 'string' || !payload.ticket) {
+    throw new Error('Gateway ticket bootstrap failed: no ticket in the REST mint answer')
+  }
+
+  return payload.ticket
+}
+
 async function mintGroupWritableHome(endpoint: GatewayEndpoint, purpose: GatewayTicketPurpose, homes: string[]) {
   if (!pythonTicketClient) {throw new Error(`Unsafe gateway control path: profile home is group-writable and this Desktop cannot verify the group is private: run chmod g-w ${homes.map(shellQuote).join(' ')}`)}
 
@@ -620,6 +654,12 @@ export function ticketScope(purpose: GatewayTicketPurpose): { scope?: 'host' } {
 }
 
 export async function mintLocalGatewayTicket(endpoint: GatewayEndpoint, purpose: GatewayTicketPurpose = 'interactive'): Promise<string> {
+  // HERMES_AGENT_BIN: the Rust owner has no Python control socket to bridge;
+  // its own REST mint answers instead (see configureRestGatewayTicketClient).
+  if (restTicketClient) {
+    return restTicketClient(endpoint, purpose)
+  }
+
   if (process.platform === 'win32') {
     if (!pythonTicketClient) {throw new Error('Gateway ticket client is not configured')}
 
