@@ -30,10 +30,11 @@ pub fn execute(args: &Value) -> String {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => {
             if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
-                return tokio::task::block_in_place(|| match handle.block_on(run_async(&owned_args))
-                {
-                    Ok(out) => out,
-                    Err(e) => tool_error(format!("terminal: {e}")),
+                return tokio::task::block_in_place(|| {
+                    match handle.block_on(run_async(&owned_args)) {
+                        Ok(out) => out,
+                        Err(e) => tool_error(format!("terminal: {e}")),
+                    }
                 });
             }
             run_on_fresh_thread(owned_args)
@@ -57,7 +58,10 @@ fn run_on_fresh_thread(args: Value) -> String {
                 Err(e) => tool_error(format!("terminal: no tokio runtime available: {e}")),
             }
         })
-        .map(|j| j.join().unwrap_or_else(|_| tool_error("terminal worker panicked")))
+        .map(|j| {
+            j.join()
+                .unwrap_or_else(|_| tool_error("terminal worker panicked"))
+        })
         .unwrap_or_else(|e| tool_error(format!("terminal: failed to spawn worker: {e}")))
 }
 
@@ -71,8 +75,15 @@ async fn run_async(args: &Value) -> Result<String, String> {
     // `background: true` hands the process to the process registry: the call
     // returns a session_id at once and the process_manage actions own it
     // from there (Python's terminal_tool_background path).
-    if args.get("background").and_then(Value::as_bool).unwrap_or(false) {
-        return Ok(crate::process_manage::spawn_background(command, args.get("cwd").and_then(Value::as_str)));
+    if args
+        .get("background")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(crate::process_manage::spawn_background(
+            command,
+            args.get("cwd").and_then(Value::as_str),
+        ));
     }
     let timeout_secs = args
         .get("timeout")
@@ -222,7 +233,10 @@ mod tests {
             "command": "cd", "cwd": cwd.to_string_lossy()
         })));
         let out = v["stdout"].as_str().unwrap();
-        assert!(out.to_lowercase().contains("temp") || !out.is_empty(), "{out}");
+        assert!(
+            out.to_lowercase().contains("temp") || !out.is_empty(),
+            "{out}"
+        );
     }
 
     #[cfg(not(windows))]

@@ -31,7 +31,9 @@ impl TodoItem {
     fn to_json(&self) -> Value {
         let mut obj = json!({ "id": self.id, "content": self.content, "status": self.status });
         if let Some(parent) = &self.parent {
-            obj.as_object_mut().unwrap().insert("parent".into(), Value::String(parent.clone()));
+            obj.as_object_mut()
+                .unwrap()
+                .insert("parent".into(), Value::String(parent.clone()));
         }
         obj
     }
@@ -46,7 +48,10 @@ pub struct TodoStore {
 
 impl TodoStore {
     pub fn new() -> Self {
-        TodoStore { items: Vec::new(), revision: 0 }
+        TodoStore {
+            items: Vec::new(),
+            revision: 0,
+        }
     }
 
     pub fn read(&self) -> Vec<TodoItem> {
@@ -62,7 +67,11 @@ impl TodoStore {
     /// partial list behind).
     pub fn write(&mut self, todos: &[Value], merge: bool) -> Result<Vec<TodoItem>, String> {
         let before = self.read();
-        let result = if merge { self.merge(todos) } else { self.fresh_items(todos) };
+        let result = if merge {
+            self.merge(todos)
+        } else {
+            self.fresh_items(todos)
+        };
         let mut items = match result {
             Ok(items) => items,
             Err(e) => {
@@ -83,7 +92,8 @@ impl TodoStore {
     fn fresh_items(&self, todos: &[Value]) -> Result<Vec<TodoItem>, String> {
         let mut deduped: Vec<Value> = Vec::new();
         // Collapse duplicate ids, keeping the LAST occurrence in its position.
-        let mut last_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut last_index: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for (i, item) in todos.iter().enumerate() {
             let key = if item.is_object() {
                 item.get("id")
@@ -159,7 +169,9 @@ impl TodoStore {
 fn cap_content(content: &str) -> String {
     let chars: Vec<char> = content.chars().collect();
     if chars.len() > MAX_TODO_CONTENT_CHARS {
-        let head: String = chars[..MAX_TODO_CONTENT_CHARS - TRUNCATION_MARKER.chars().count()].iter().collect();
+        let head: String = chars[..MAX_TODO_CONTENT_CHARS - TRUNCATION_MARKER.chars().count()]
+            .iter()
+            .collect();
         format!("{head}{TRUNCATION_MARKER}")
     } else {
         content.to_string()
@@ -177,15 +189,33 @@ fn validate(item: &Value) -> Result<TodoItem, String> {
             parent: None,
         });
     }
-    let item_id = item.get("id").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).unwrap_or("?");
-    let content = item.get("content").and_then(Value::as_str).unwrap_or("").trim();
+    let item_id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("?");
+    let content = item
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if content.is_empty() {
         return Err(format!(
             "Todo item '{item_id}' has empty or missing content. Each item must have a non-empty description."
         ));
     }
-    let status = item.get("status").and_then(Value::as_str).unwrap_or("pending").trim().to_lowercase();
-    let status = if VALID_STATUSES.contains(&status.as_str()) { status } else { "pending".into() };
+    let status = item
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("pending")
+        .trim()
+        .to_lowercase();
+    let status = if VALID_STATUSES.contains(&status.as_str()) {
+        status
+    } else {
+        "pending".into()
+    };
     let parent = item
         .get("parent")
         .map(|p| p.as_str().map(str::trim).unwrap_or("").to_string())
@@ -194,7 +224,11 @@ fn validate(item: &Value) -> Result<TodoItem, String> {
         id: item_id.to_string(),
         content: cap_content(content),
         status,
-        parent: if !parent.is_empty() && parent != item_id { Some(parent) } else { None },
+        parent: if !parent.is_empty() && parent != item_id {
+            Some(parent)
+        } else {
+            None
+        },
     })
 }
 
@@ -235,9 +269,13 @@ fn sanitize_parents(items: &mut [TodoItem]) {
 fn normalize_order(items: Vec<TodoItem>) -> Vec<TodoItem> {
     let has_parent = items.iter().any(|i| i.parent.is_some());
     let active = items.iter().position(|i| i.status == "in_progress");
-    let (Some(active), false) = (active, has_parent) else { return items };
+    let (Some(active), false) = (active, has_parent) else {
+        return items;
+    };
     let first_pending = items.iter().position(|i| i.status == "pending");
-    let Some(first_pending) = first_pending else { return items };
+    let Some(first_pending) = first_pending else {
+        return items;
+    };
     if first_pending > active {
         return items;
     }
@@ -281,18 +319,27 @@ pub fn execute(args: &Value) -> String {
     let mut guard = store().lock().unwrap();
     let items: Vec<TodoItem> = match args.get("todos") {
         None | Some(Value::Null) => guard.read(),
-        Some(Value::Array(todos)) => match guard.write(todos, args.get("merge").and_then(Value::as_bool).unwrap_or(false)) {
+        Some(Value::Array(todos)) => match guard.write(
+            todos,
+            args.get("merge").and_then(Value::as_bool).unwrap_or(false),
+        ) {
             Ok(items) => items,
             Err(e) => return crate::util::tool_error(e),
         },
         Some(other) => {
-            return crate::util::tool_error(format!("todos must be a list, got {}", json_type_name(other)));
+            return crate::util::tool_error(format!(
+                "todos must be a list, got {}",
+                json_type_name(other)
+            ));
         }
     };
     let mut summary = json!({ "total": items.len() });
     for status in VALID_STATUSES {
         let count = items.iter().filter(|i| i.status == status).count();
-        summary.as_object_mut().unwrap().insert(status.to_string(), json!(count));
+        summary
+            .as_object_mut()
+            .unwrap()
+            .insert(status.to_string(), json!(count));
     }
     json!({
         "todos": items.iter().map(TodoItem::to_json).collect::<Vec<_>>(),
@@ -356,7 +403,14 @@ mod tests {
         let _guard = reset();
         execute(&json!({"todos": [item("1", "kept", "pending")]}));
         let out = v(&execute(&json!({"todos": [item("2", "", "pending")]})));
-        assert!(out["error"].as_str().unwrap().contains("empty or missing content"), "{}", out);
+        assert!(
+            out["error"]
+                .as_str()
+                .unwrap()
+                .contains("empty or missing content"),
+            "{}",
+            out
+        );
         let out = v(&execute(&json!({})));
         assert_eq!(todo_items(&out).len(), 1);
         drop(_guard);
@@ -366,7 +420,9 @@ mod tests {
     #[test]
     fn merge_updates_fields_and_appends() {
         let _guard = reset();
-        execute(&json!({"todos": [item("1", "original", "pending"), item("2", "other", "pending")]}));
+        execute(
+            &json!({"todos": [item("1", "original", "pending"), item("2", "other", "pending")]}),
+        );
         let out = v(&execute(&json!({
             "merge": true,
             "todos": [
@@ -392,7 +448,10 @@ mod tests {
             item("3", "later", "pending"),
         ]})));
         assert_eq!(
-            todo_items(&out).iter().map(|i| i["id"].clone()).collect::<Vec<_>>(),
+            todo_items(&out)
+                .iter()
+                .map(|i| i["id"].clone())
+                .collect::<Vec<_>>(),
             vec![json!("2"), json!("1"), json!("3")]
         );
         drop(_guard);
@@ -437,7 +496,9 @@ mod tests {
     fn long_content_is_capped_with_marker() {
         let _guard = reset();
         let long = "x".repeat(MAX_TODO_CONTENT_CHARS + 50);
-        let out = v(&execute(&json!({"todos": [{"id": "1", "content": long, "status": "pending"}]})));
+        let out = v(&execute(
+            &json!({"todos": [{"id": "1", "content": long, "status": "pending"}]}),
+        ));
         let items = todo_items(&out);
         let content = items[0]["content"].as_str().unwrap();
         assert!(content.ends_with(TRUNCATION_MARKER));
@@ -450,7 +511,10 @@ mod tests {
     fn non_list_todos_is_error() {
         let _guard = reset();
         let out = v(&execute(&json!({"todos": "nope"})));
-        assert!(out["error"].as_str().unwrap().contains("todos must be a list, got str"));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("todos must be a list, got str"));
         drop(_guard);
         reset();
     }

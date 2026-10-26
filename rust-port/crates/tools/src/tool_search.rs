@@ -187,12 +187,7 @@ impl ToolSearchConfig {
         Self {
             enabled,
             threshold_pct: safe_float(&obj["threshold_pct"], 5.0).clamp(0.0, 100.0),
-            search_default_limit: clamped_int(
-                &obj["search_default_limit"],
-                5,
-                1,
-                max_search_limit,
-            ),
+            search_default_limit: clamped_int(&obj["search_default_limit"], 5, 1, max_search_limit),
             max_search_limit,
             listing: tri_state(&obj["listing"]),
             listing_max_tokens: clamped_int(&obj["listing_max_tokens"], 4000, 200, 60000),
@@ -272,7 +267,8 @@ pub fn tokenize(text: &str) -> Vec<String> {
 /// The `function` block of a tool-def (empty object when absent/null).
 pub fn function_block(td: &Value) -> &Value {
     static EMPTY: OnceLock<Value> = OnceLock::new();
-    td.get("function").unwrap_or(EMPTY.get_or_init(|| json!({})))
+    td.get("function")
+        .unwrap_or(EMPTY.get_or_init(|| json!({})))
 }
 
 /// The model-facing name of a tool-def (`""` for a nameless def).
@@ -304,7 +300,10 @@ fn entry_search_text(td: &Value, source_label: &str) -> String {
         .and_then(Value::as_object)
         .map(|props| props.keys().cloned().collect::<Vec<_>>().join(" "))
         .unwrap_or_default();
-    let desc = fn_block.get("description").and_then(Value::as_str).unwrap_or("");
+    let desc = fn_block
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     format!("{name_words} {extra} {desc} {params}")
 }
 
@@ -324,7 +323,11 @@ fn classify_source(name: &str) -> (String, String) {
 
 /// Human-facing group heading for a toolset, e.g. `mcp-github` -> `github`.
 fn listing_group_label(source_name: &str) -> String {
-    let label = if source_name.is_empty() { "other" } else { source_name };
+    let label = if source_name.is_empty() {
+        "other"
+    } else {
+        source_name
+    };
     label.strip_prefix("mcp-").unwrap_or(label).to_string()
 }
 
@@ -365,15 +368,23 @@ pub fn build_catalog(tool_defs: &[Value]) -> Vec<CatalogEntry> {
 // ---------------------------------------------------------------------------
 
 /// (doc_lengths, avg_dl, doc_freq, n_docs) shared by every query.
-type CorpusStats = (Vec<usize>, f64, std::collections::HashMap<String, usize>, usize);
+type CorpusStats = (
+    Vec<usize>,
+    f64,
+    std::collections::HashMap<String, usize>,
+    usize,
+);
 
 fn corpus_stats(catalog: &[CatalogEntry]) -> CorpusStats {
     let doc_lengths: Vec<usize> = catalog.iter().map(|e| e.tokens.len()).collect();
-    let avg_dl =
-        doc_lengths.iter().sum::<usize>() as f64 / doc_lengths.len().max(1) as f64;
+    let avg_dl = doc_lengths.iter().sum::<usize>() as f64 / doc_lengths.len().max(1) as f64;
     let mut doc_freq: std::collections::HashMap<String, usize> = Default::default();
     for entry in catalog {
-        for tok in entry.tokens.iter().collect::<std::collections::BTreeSet<_>>() {
+        for tok in entry
+            .tokens
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+        {
             *doc_freq.entry(tok.clone()).or_insert(0) += 1;
         }
     }
@@ -423,7 +434,11 @@ fn gate_token(
     };
     query_tokens
         .iter()
-        .max_by(|a, b| idf(a).partial_cmp(&idf(b)).unwrap_or(std::cmp::Ordering::Equal))
+        .max_by(|a, b| {
+            idf(a)
+                .partial_cmp(&idf(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
 }
@@ -495,13 +510,25 @@ pub fn search_catalog(
             let score = if entry.name.to_lowercase() == exact_name {
                 f64::INFINITY
             } else {
-                bm25_score(&query_tokens, &entry.tokens, stats.1, doc_freq, n_docs, 1.5, 0.75)
+                bm25_score(
+                    &query_tokens,
+                    &entry.tokens,
+                    stats.1,
+                    doc_freq,
+                    n_docs,
+                    1.5,
+                    0.75,
+                )
             };
             (score, entry)
         })
         .collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    scored.into_iter().take(limit).map(|(_, e)| e.clone()).collect()
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, e)| e.clone())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -580,7 +607,13 @@ fn render_group(label: &str, tools: &[(String, String)], mode: &str) -> String {
                     }
                 }
             } else {
-                lines.push(tools.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", "));
+                lines.push(
+                    tools
+                        .iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
             }
             lines.join("\n")
         }
@@ -610,8 +643,17 @@ pub fn build_catalog_listing_with_form(
             let (_kind, source_name) = classify_source(name);
             listing_group_label(&source_name)
         };
-        let desc = short_desc(fn_block.get("description").and_then(Value::as_str).unwrap_or(""), 60);
-        groups.entry(label).or_default().push((name.to_string(), desc));
+        let desc = short_desc(
+            fn_block
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+            60,
+        );
+        groups
+            .entry(label)
+            .or_default()
+            .push((name.to_string(), desc));
     }
     if groups.is_empty() {
         return (None, "none".into());
@@ -643,7 +685,10 @@ pub fn build_catalog_listing_with_form(
     }
     // 3. Collapse the LARGEST rendered groups first (deterministic: size then
     // label).
-    let mut modes = groups.keys().map(|k| (k.clone(), "names".into())).collect::<std::collections::BTreeMap<_, _>>();
+    let mut modes = groups
+        .keys()
+        .map(|k| (k.clone(), "names".into()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     let mut order: Vec<&String> = groups.keys().collect();
     order.sort_by(|a, b| {
         let sa = render_group(a, &groups[a.as_str()], "names").len();
@@ -654,7 +699,14 @@ pub fn build_catalog_listing_with_form(
         modes.insert(lbl.clone(), "summary".into());
         if let Some(text) = fits(&modes) {
             let all_summary = modes.values().all(|m| m == "summary");
-            return (Some(text), if all_summary { "groups".into() } else { "mixed".into() });
+            return (
+                Some(text),
+                if all_summary {
+                    "groups".into()
+                } else {
+                    "mixed".into()
+                },
+            );
         }
     }
     (None, "none".into())
@@ -688,7 +740,11 @@ pub fn is_deferrable_tool_name(name: &str, defer_tools: Option<&[String]>) -> bo
 /// Every tool name in the session's `tool_defs` — what this session can
 /// actually reach.
 pub fn session_tool_names(tool_defs: &[Value]) -> Vec<String> {
-    tool_defs.iter().map(|td| fn_name(td)).filter(|n| !n.is_empty()).collect()
+    tool_defs
+        .iter()
+        .map(|td| fn_name(td))
+        .filter(|n| !n.is_empty())
+        .collect()
 }
 
 /// Split a tool-defs list into (visible, deferrable); bridge tools are dropped.
@@ -723,7 +779,11 @@ pub fn estimate_tokens_from_schemas(tool_defs: &[Value]) -> i64 {
 
 /// "off" never activates; "on"/"auto" activate whenever any deferrable tool
 /// exists (`context_length` is kept for caller compatibility).
-pub fn should_activate(config: &ToolSearchConfig, deferrable_tokens: i64, connections_granted: bool) -> bool {
+pub fn should_activate(
+    config: &ToolSearchConfig,
+    deferrable_tokens: i64,
+    connections_granted: bool,
+) -> bool {
     if config.enabled == "off" {
         return false;
     }
@@ -935,11 +995,16 @@ pub fn assemble_tool_defs(
     let mut listing_form = "none".to_string();
     let listing_budget = listing_token_budget(&config, context_length);
     if config.listing != "off" {
-        let (text, form) = build_catalog_listing_with_form(&deferrable, listing_budget.max(0) as usize);
+        let (text, form) =
+            build_catalog_listing_with_form(&deferrable, listing_budget.max(0) as usize);
         listing = text;
         listing_form = form;
     }
-    let tier = if ["full", "names", "mixed"].contains(&listing_form.as_str()) { 1 } else { 2 };
+    let tier = if ["full", "names", "mixed"].contains(&listing_form.as_str()) {
+        1
+    } else {
+        2
+    };
     AssemblyResult {
         tool_defs: visible
             .into_iter()
@@ -972,7 +1037,11 @@ pub fn normalize_tool_call_entries(args: &Value) -> Result<Vec<(String, Value)>,
     let mut raw_calls = args.get("calls").cloned();
     if raw_calls.is_none() {
         // Legacy single shape.
-        let name = args.get("name").and_then(Value::as_str).unwrap_or("").trim();
+        let name = args
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
         if name.is_empty() {
             return Err("tool_call requires 'calls' (an array of {name, arguments})".into());
         }
@@ -1009,14 +1078,17 @@ pub fn normalize_tool_call_entries(args: &Value) -> Result<Vec<(String, Value)>,
             return Err(format!("tool_call calls[{position}] requires a 'name'"));
         }
         if is_bridge_tool(name) {
-            return Err(format!("tool_call cannot invoke '{name}' (it is itself a bridge tool)"));
+            return Err(format!(
+                "tool_call cannot invoke '{name}' (it is itself a bridge tool)"
+            ));
         }
         let raw_args = obj.get("arguments").cloned().unwrap_or(Value::Null);
         let raw_args = match raw_args {
             Value::Null => json!({}),
             Value::String(s) if s.trim().is_empty() => json!({}),
-            Value::String(s) => serde_json::from_str::<Value>(&s)
-                .map_err(|e| format!("tool_call calls[{position}].arguments is not valid JSON: {e}"))?,
+            Value::String(s) => serde_json::from_str::<Value>(&s).map_err(|e| {
+                format!("tool_call calls[{position}].arguments is not valid JSON: {e}")
+            })?,
             other => other,
         };
         if !raw_args.is_object() {
@@ -1199,7 +1271,9 @@ fn shared_tool_record(entry: &CatalogEntry) -> Value {
 fn available_source_summary(catalog: &[CatalogEntry]) -> Vec<Value> {
     let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
     for entry in catalog {
-        *counts.entry(listing_group_label(&entry.source_name)).or_insert(0) += 1;
+        *counts
+            .entry(listing_group_label(&entry.source_name))
+            .or_insert(0) += 1;
     }
     counts
         .into_iter()
@@ -1223,9 +1297,9 @@ fn string_list_arg(
         Some(other) => other.clone(),
         None => Value::Null,
     };
-    let items = raw.as_array().ok_or_else(|| {
-        tool_error(format!("{key} is required and must be an array of strings"))
-    })?;
+    let items = raw
+        .as_array()
+        .ok_or_else(|| tool_error(format!("{key} is required and must be an array of strings")))?;
     let mut out: Vec<String> = Vec::new();
     for item in items {
         let text = match item {
@@ -1371,9 +1445,8 @@ pub fn dispatch_tool_describe(
     let mut result = json!({ "tools": Value::Object(tools) });
     if !not_found.is_empty() {
         result["not_found"] = Value::Array(not_found);
-        result["hint"] = json!(
-            "Names in not_found are not currently available. Re-run tool_search to refresh."
-        );
+        result["hint"] =
+            json!("Names in not_found are not currently available. Re-run tool_search to refresh.");
     }
     if !errors.is_empty() {
         result["errors"] = Value::Object(errors);
@@ -1400,10 +1473,7 @@ pub fn resolve_underlying_call(
     }
     let config = config.unwrap_or_default();
     if !is_deferrable_tool_name(name, Some(&config.effective_defer_tools())) {
-        return Err(tool_error(not_deferrable_error(
-            name,
-            session_names,
-        )));
+        return Err(tool_error(not_deferrable_error(name, session_names)));
     }
     Ok((name.clone(), raw_args.clone()))
 }
@@ -1447,7 +1517,11 @@ pub fn execute_describe(args: &Value) -> String {
 /// sync registry path (approvals/hooks apply there, as in Python).
 pub fn execute_call(args: &Value) -> String {
     let defs = registry_tool_defs();
-    let names: Vec<String> = defs.iter().map(|td| fn_name(td)).filter(|n| !n.is_empty()).collect();
+    let names: Vec<String> = defs
+        .iter()
+        .map(|td| fn_name(td))
+        .filter(|n| !n.is_empty())
+        .collect();
     let (name, call_args) = match resolve_underlying_call(args, Some(&names), None) {
         Ok(pair) => pair,
         Err(err) => return err,
@@ -1530,7 +1604,13 @@ mod tests {
         let cfg = ToolSearchConfig::from_raw(&json!({"defer": []}));
         assert!(cfg.effective_defer_tools().is_empty());
         let cfg = ToolSearchConfig::from_raw(&json!({"defer": "todo_list"}));
-        assert_eq!(cfg.effective_defer_tools(), DEFAULT_DEFERRED_TOOLS.iter().map(|s| (*s).into()).collect::<Vec<String>>());
+        assert_eq!(
+            cfg.effective_defer_tools(),
+            DEFAULT_DEFERRED_TOOLS
+                .iter()
+                .map(|s| (*s).into())
+                .collect::<Vec<String>>()
+        );
     }
 
     #[test]
@@ -1568,7 +1648,10 @@ mod tests {
 
     #[test]
     fn short_desc_first_sentence_and_word_boundary_clip() {
-        assert_eq!(short_desc("  Send   an email. Then more. ", 60), "Send an email.");
+        assert_eq!(
+            short_desc("  Send   an email. Then more. ", 60),
+            "Send an email."
+        );
         // e.g. does not end a sentence.
         assert_eq!(
             short_desc("Uses e.g. Gmail. Second sentence.", 60),
@@ -1614,7 +1697,10 @@ mod tests {
         let (visible, deferrable) = classify_tools(&defs, Some(&["tool_call".into()]));
         assert!(visible.is_empty());
         assert!(deferrable.is_empty());
-        assert!(!is_deferrable_tool_name("tool_call", Some(&["tool_call".into()])));
+        assert!(!is_deferrable_tool_name(
+            "tool_call",
+            Some(&["tool_call".into()])
+        ));
         // Core built-ins stay eager unless named in the (explicit or curated
         // default) defer list; with the default config todo_list defers.
         let defer = ToolSearchConfig::default().effective_defer_tools();
@@ -1638,7 +1724,8 @@ mod tests {
         assert!(should_activate(&cfg, 1, false));
         assert!(!should_activate(&cfg, 0, false));
         // Budget: min(listing_max_tokens, 5% of context); unknown context -> 10K leg.
-        let cfg = ToolSearchConfig::from_raw(&json!({"threshold_pct": 5, "listing_max_tokens": 4000}));
+        let cfg =
+            ToolSearchConfig::from_raw(&json!({"threshold_pct": 5, "listing_max_tokens": 4000}));
         assert_eq!(listing_token_budget(&cfg, Some(200_000)), 4000);
         assert_eq!(listing_token_budget(&cfg, Some(20_000)), 1000);
         assert_eq!(listing_token_budget(&cfg, None), 4000);
@@ -1674,7 +1761,10 @@ mod tests {
         let defs = gmail_like();
         // Missing queries.
         let out = dispatch_tool_search(&json!({}), &defs, None);
-        assert!(out.contains("queries is required and must be an array of strings"), "{out}");
+        assert!(
+            out.contains("queries is required and must be an array of strings"),
+            "{out}"
+        );
         // A bare string is a one-item list (common model slip).
         let out = dispatch_tool_search(&json!({"queries": "gmail send email"}), &defs, None);
         let parsed = v(&out);
@@ -1705,7 +1795,10 @@ mod tests {
         // Empty group carries available_sources + the retry hint.
         assert!(results[1]["matches"].as_array().unwrap().is_empty());
         assert!(results[1]["available_sources"].is_array());
-        assert!(results[1]["hint"].as_str().unwrap().contains("Retry tool_search"));
+        assert!(results[1]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("Retry tool_search"));
         // Shared tools map records carry source, clipped description, required.
         let rec = &parsed["tools"]["mcp__gmail__send"];
         assert_eq!(rec["source"], "mcp");
@@ -1722,10 +1815,17 @@ mod tests {
         let schema = &parsed["tools"]["mcp__gmail__send"];
         assert_eq!(schema["parameters"]["properties"]["to"]["type"], "string");
         // Unknown names -> not_found + hint.
-        let out = dispatch_tool_describe(&json!({"names": ["mcp__gmail__send", "mcp__nope"]}), &defs, None);
+        let out = dispatch_tool_describe(
+            &json!({"names": ["mcp__gmail__send", "mcp__nope"]}),
+            &defs,
+            None,
+        );
         let parsed = v(&out);
         assert_eq!(parsed["not_found"][0], "mcp__nope");
-        assert!(parsed["hint"].as_str().unwrap().contains("Re-run tool_search"));
+        assert!(parsed["hint"]
+            .as_str()
+            .unwrap()
+            .contains("Re-run tool_search"));
         // Too many DISTINCT names (dedupe collapses repeats first).
         let names: Vec<String> = (0..11).map(|i| format!("n{i}")).collect();
         let out = dispatch_tool_describe(&json!({"names": names}), &defs, None);
@@ -1733,7 +1833,10 @@ mod tests {
         // A core (Rust-registry) tool absent from this session's defs: it is
         // unreachable through the bridge, whatever its door.
         let out = dispatch_tool_describe(&json!({"names": ["read_file"]}), &defs, None);
-        assert!(out.contains("not available in this execution context"), "{out}");
+        assert!(
+            out.contains("not available in this execution context"),
+            "{out}"
+        );
         // But when the session's own defs DO carry it, it is a wrong-door call.
         let all_defs = registry_tool_defs();
         let out = dispatch_tool_describe(&json!({"names": ["read_file"]}), &all_defs, None);
@@ -1751,7 +1854,8 @@ mod tests {
                 {"name": "a", "arguments": {"x": 1}},
                 {"name": "b", "arguments": "{\"y\": 2}"}
             ]
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[1].0, "b");
         assert_eq!(entries[1].1["y"], 2);
@@ -1761,10 +1865,13 @@ mod tests {
         // calls as a JSON string envelope.
         let entries = normalize_tool_call_entries(&json!({
             "calls": "[{\"name\": \"a\", \"arguments\": {}}]"
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(entries.len(), 1);
         // Empty/null arguments coerce to {}.
-        let entries = normalize_tool_call_entries(&json!({"calls": [{"name": "a", "arguments": ""}]})).unwrap();
+        let entries =
+            normalize_tool_call_entries(&json!({"calls": [{"name": "a", "arguments": ""}]}))
+                .unwrap();
         assert_eq!(entries[0].1, json!({}));
         // Errors.
         assert!(normalize_tool_call_entries(&json!({}))
@@ -1772,12 +1879,16 @@ mod tests {
             .contains("requires 'calls'"));
         assert!(normalize_tool_call_entries(&json!({"calls": []})).is_err());
         assert!(normalize_tool_call_entries(&json!({"calls": [{"arguments": {}}]})).is_err());
-        assert!(normalize_tool_call_entries(&json!({"calls": [{"name": "tool_search", "arguments": {}}]}))
-            .unwrap_err()
-            .contains("it is itself a bridge tool"));
-        assert!(normalize_tool_call_entries(&json!({"calls": [{"name": "a", "arguments": "{bad"}]}))
-            .unwrap_err()
-            .contains("is not valid JSON"));
+        assert!(normalize_tool_call_entries(
+            &json!({"calls": [{"name": "tool_search", "arguments": {}}]})
+        )
+        .unwrap_err()
+        .contains("it is itself a bridge tool"));
+        assert!(normalize_tool_call_entries(
+            &json!({"calls": [{"name": "a", "arguments": "{bad"}]})
+        )
+        .unwrap_err()
+        .contains("is not valid JSON"));
     }
 
     #[test]
@@ -1789,7 +1900,10 @@ mod tests {
             ]
         });
         let err = resolve_underlying_call(&args, None, None).unwrap_err();
-        assert!(err.contains("tool_call takes exactly one entry for local tools; you sent 2"), "{err}");
+        assert!(
+            err.contains("tool_call takes exactly one entry for local tools; you sent 2"),
+            "{err}"
+        );
         assert!(err.contains("Retry with only:"));
     }
 
@@ -1801,7 +1915,10 @@ mod tests {
         assert!(err.contains("directly-listed tool"), "{err}");
         // A core tool the session doesn't carry: unavailable, not "call it directly".
         let err = resolve_underlying_call(&args, Some(&["terminal".into()]), None).unwrap_err();
-        assert!(err.contains("not available in this execution context"), "{err}");
+        assert!(
+            err.contains("not available in this execution context"),
+            "{err}"
+        );
         // Unknown non-MCP name (an mcp__ name defers by prefix, so use a bare
         // unknown name to reach the unknown-tool rejection).
         let args = json!({"calls": [{"name": "frobnicate", "arguments": {}}]});
@@ -1820,7 +1937,10 @@ mod tests {
         // `action`).
         let err = validate_deferred_call_args("maps", &json!({}));
         let err = err.unwrap();
-        assert!(err.contains("missing required argument(s): action"), "{err}");
+        assert!(
+            err.contains("missing required argument(s): action"),
+            "{err}"
+        );
         assert!(err.contains("\"constraint\":\"required\""));
         assert!(err.contains("The tool was NOT invoked."));
         // Satisfied -> dispatch (None).
@@ -1833,9 +1953,15 @@ mod tests {
     fn registry_entry_points_work() {
         let out = execute_search(&json!({"queries": ["schedule a cron job"]}));
         let parsed = v(&out);
-        assert_eq!(parsed["results"][0]["matches"][0], "cronjob_manage", "{out}");
+        assert_eq!(
+            parsed["results"][0]["matches"][0], "cronjob_manage",
+            "{out}"
+        );
         let out = execute_describe(&json!({"names": ["cronjob_manage"]}));
-        assert!(v(&out)["tools"]["cronjob_manage"]["parameters"].is_object(), "{out}");
+        assert!(
+            v(&out)["tools"]["cronjob_manage"]["parameters"].is_object(),
+            "{out}"
+        );
         // tool_call through the bridge executes the underlying tool.
         let out = execute_call(&json!({
             "calls": [{"name": "todo_list", "arguments": {"todos": [{"id": "1", "content": "wire it", "status": "pending"}]}}]
@@ -1844,7 +1970,9 @@ mod tests {
         // tool_call validates required args before dispatching.
         let out = execute_call(&json!({"calls": [{"name": "todo_list", "arguments": {}}]}));
         // todo_list has no required args -> dispatches; use one with required.
-        let out = execute_call(&json!({"calls": [{"name": "session_search", "arguments": {"around_message_id": "x"}}]}));
+        let out = execute_call(
+            &json!({"calls": [{"name": "session_search", "arguments": {"around_message_id": "x"}}]}),
+        );
         assert!(!out.is_empty());
     }
 }

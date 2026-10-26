@@ -18,18 +18,15 @@ pub fn execute(args: &Value) -> String {
     let get = |k: &str| args.get(k).and_then(Value::as_str);
     let (path, old, new) = match (get("path"), get("old_string"), get("new_string")) {
         (Some(p), Some(o), Some(n)) => (p, o, n),
-        _ => {
-            return tool_error(
-                "patch: 'path', 'old_string' and 'new_string' are required",
-            )
-        }
+        _ => return tool_error("patch: 'path', 'old_string' and 'new_string' are required"),
     };
-    let replace_all = args.get("replace_all").and_then(Value::as_bool).unwrap_or(false);
+    let replace_all = args
+        .get("replace_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     if old == new {
-        return tool_error(
-            "patch: new_string must differ from old_string (no-op edit refused)",
-        );
+        return tool_error("patch: new_string must differ from old_string (no-op edit refused)");
     }
     match patch(Path::new(path), old, new, replace_all) {
         Ok((resolved, count)) => json!({
@@ -51,8 +48,7 @@ fn patch(
     replace_all: bool,
 ) -> Result<(std::path::PathBuf, usize), String> {
     let p = expand_tilde(&path_display(path));
-    let content = fs::read_to_string(&p)
-        .map_err(|e| format!("Cannot read '{path:?}': {e}"))?;
+    let content = fs::read_to_string(&p).map_err(|e| format!("Cannot read '{path:?}': {e}"))?;
 
     if old.is_empty() {
         return Err("patch: old_string must be non-empty".into());
@@ -85,10 +81,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn tmpdir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "hermes-tools-edit-{}",
-            unique_suffix(name)
-        ));
+        let dir = std::env::temp_dir().join(format!("hermes-tools-edit-{}", unique_suffix(name)));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -133,7 +126,10 @@ mod tests {
         let dir = tmpdir("all");
         let file = dir.join("f.txt");
         fs::write(&file, "a-b-a\n").unwrap();
-        let v = run(&file, json!({"old_string": "a", "new_string": "z", "replace_all": true}));
+        let v = run(
+            &file,
+            json!({"old_string": "a", "new_string": "z", "replace_all": true}),
+        );
         assert_eq!(v["success"], true);
         assert_eq!(v["replacements"], 2);
         assert_eq!(fs::read_to_string(&file).unwrap(), "z-b-z\n");

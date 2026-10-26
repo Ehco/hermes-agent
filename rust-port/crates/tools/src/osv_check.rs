@@ -68,7 +68,8 @@ impl OsvPoster for ReqwestOsvPoster {
 
 /// `(ecosystem, package, version)` → `(expiry_wallclock, blocked_message)`.
 fn cache() -> &'static Mutex<HashMap<(String, String, String), (f64, Option<String>)>> {
-    static CACHE: OnceLock<Mutex<HashMap<(String, String, String), (f64, Option<String>)>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<(String, String, String), (f64, Option<String>)>>> =
+        OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -79,7 +80,11 @@ fn osv_endpoint() -> String {
 /// `_infer_ecosystem`: split on BOTH separators (basename leaves
 /// `C:\...\uvx.exe` intact on POSIX-authored configs).
 pub fn infer_ecosystem(command: &str) -> Option<&'static str> {
-    let base = command.rsplit(['\\', '/']).next().unwrap_or(command).to_lowercase();
+    let base = command
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(command)
+        .to_lowercase();
     ECOSYSTEM_BY_COMMAND
         .iter()
         .find(|(name, _)| *name == base)
@@ -89,7 +94,10 @@ pub fn infer_ecosystem(command: &str) -> Option<&'static str> {
 /// `_parse_package_from_args`: skip flags to find the package token; npx's
 /// explicit install target (`--package=NAME` / `--package NAME` / `-p NAME`)
 /// names a package distinct from the executed binary.
-pub fn parse_package_from_args(args: &[String], ecosystem: &str) -> (Option<String>, Option<String>) {
+pub fn parse_package_from_args(
+    args: &[String],
+    ecosystem: &str,
+) -> (Option<String>, Option<String>) {
     let mut package_token: Option<String> = None;
     let mut take_next = false;
     for arg in args {
@@ -111,7 +119,9 @@ pub fn parse_package_from_args(args: &[String], ecosystem: &str) -> (Option<Stri
         package_token = Some(arg.clone());
         break;
     }
-    let Some(token) = package_token else { return (None, None) };
+    let Some(token) = package_token else {
+        return (None, None);
+    };
     match ecosystem {
         "npm" => parse_npm_package(&token),
         "PyPI" => parse_pypi_package(&token),
@@ -128,7 +138,10 @@ pub fn parse_npm_package(token: &str) -> (Option<String>, Option<String>) {
         };
         let at = rest[slash + 1..].find('@').map(|p| p + slash + 1);
         return match at {
-            Some(at) => (Some(format!("@{}", &rest[..at])), Some(rest[at + 1..].to_string())),
+            Some(at) => (
+                Some(format!("@{}", &rest[..at])),
+                Some(rest[at + 1..].to_string()),
+            ),
             None => (Some(token.to_string()), None),
         };
     }
@@ -157,13 +170,19 @@ pub fn parse_pypi_package(token: &str) -> (Option<String>, Option<String>) {
 }
 
 /// `_query_osv`: only MAL-* advisories (regular CVEs ignored).
-pub fn query_osv(poster: &dyn OsvPoster, package: &str, ecosystem: &str, version: Option<&str>) -> Result<Vec<(String, String)>, String> {
+pub fn query_osv(
+    poster: &dyn OsvPoster,
+    package: &str,
+    ecosystem: &str,
+    version: Option<&str>,
+) -> Result<Vec<(String, String)>, String> {
     let mut payload = json!({ "package": { "name": package, "ecosystem": ecosystem } });
     if let Some(version) = version {
         payload["version"] = json!(version);
     }
     let body = poster.post_json(&osv_endpoint(), &payload.to_string())?;
-    let parsed: Value = serde_json::from_str(&body).map_err(|e| format!("OSV returned invalid JSON: {e}"))?;
+    let parsed: Value =
+        serde_json::from_str(&body).map_err(|e| format!("OSV returned invalid JSON: {e}"))?;
     Ok(parsed
         .get("vulns")
         .and_then(Value::as_array)
@@ -189,16 +208,29 @@ pub fn query_osv(poster: &dyn OsvPoster, package: &str, ecosystem: &str, version
 }
 
 fn now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 /// `check_package_for_malware`: returns the BLOCKED message, else None — also
 /// on network errors/unknown commands (fail-open).
-pub fn check_package_for_malware_with(poster: &dyn OsvPoster, command: &str, args: &[String]) -> Option<String> {
-    let Some(ecosystem) = infer_ecosystem(command) else { return None };
+pub fn check_package_for_malware_with(
+    poster: &dyn OsvPoster,
+    command: &str,
+    args: &[String],
+) -> Option<String> {
+    let Some(ecosystem) = infer_ecosystem(command) else {
+        return None;
+    };
     let (package, version) = parse_package_from_args(args, ecosystem);
     let Some(package) = package else { return None };
-    let key = (ecosystem.to_string(), package.clone(), version.clone().unwrap_or_default());
+    let key = (
+        ecosystem.to_string(),
+        package.clone(),
+        version.clone().unwrap_or_default(),
+    );
     if let Some((expiry, result)) = cache().lock().unwrap().get(&key).cloned() {
         if now() < expiry {
             return result;
@@ -213,7 +245,12 @@ pub fn check_package_for_malware_with(poster: &dyn OsvPoster, command: &str, arg
     let result = if malware.is_empty() {
         None
     } else {
-        let ids = malware.iter().take(3).map(|(id, _)| id.as_str()).collect::<Vec<_>>().join(", ");
+        let ids = malware
+            .iter()
+            .take(3)
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         let summaries = malware
             .iter()
             .take(3)
@@ -303,7 +340,11 @@ mod tests {
 
     #[test]
     fn package_token_skips_flags_and_honors_package_flag() {
-        let args: Vec<String> = vec!["--yes".into(), "--package=chalk@5".into(), "index.js".into()];
+        let args: Vec<String> = vec![
+            "--yes".into(),
+            "--package=chalk@5".into(),
+            "index.js".into(),
+        ];
         let (pkg, ver) = parse_package_from_args(&args, "npm");
         assert_eq!(pkg.as_deref(), Some("chalk"));
         assert_eq!(ver.as_deref(), Some("5"));
@@ -315,7 +356,9 @@ mod tests {
 
     #[test]
     fn clean_verdict_ignores_regular_cves_and_caches() {
-        let poster = StubPoster { calls: AtomicU32::new(0) };
+        let poster = StubPoster {
+            calls: AtomicU32::new(0),
+        };
         let args: Vec<String> = vec!["safe-pkg".into()];
         assert!(check_package_for_malware_with(&poster, "npx", &args).is_none());
         assert_eq!(poster.calls.load(Ordering::SeqCst), 1);
@@ -326,10 +369,15 @@ mod tests {
 
     #[test]
     fn malware_blocks_with_ids_and_summaries() {
-        let poster = StubPoster { calls: AtomicU32::new(0) };
+        let poster = StubPoster {
+            calls: AtomicU32::new(0),
+        };
         let args: Vec<String> = vec!["evil-pkg@2.0".into()];
         let blocked = check_package_for_malware_with(&poster, "npx", &args).unwrap();
-        assert!(blocked.starts_with("BLOCKED: Package 'evil-pkg' (npm)"), "{blocked}");
+        assert!(
+            blocked.starts_with("BLOCKED: Package 'evil-pkg' (npm)"),
+            "{blocked}"
+        );
         assert!(blocked.contains("MAL-2026-1"), "{blocked}");
         // CVE-only entries are filtered out of the id list.
         assert!(!blocked.contains("CVE"), "{blocked}");
@@ -354,7 +402,9 @@ mod tests {
 
     #[test]
     fn request_payload_shape() {
-        let poster = StubPoster { calls: AtomicU32::new(0) };
+        let poster = StubPoster {
+            calls: AtomicU32::new(0),
+        };
         let args: Vec<String> = vec!["evil-pkg".into()];
         let _ = check_package_for_malware_with(&poster, "npx", &args);
         // The stub asserts the ecosystem inside the payload; assert the name too.

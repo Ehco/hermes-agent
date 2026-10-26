@@ -26,7 +26,9 @@ pub fn skills_root() -> PathBuf {
             return PathBuf::from(dir);
         }
     }
-    let home = std::env::var("HERMES_HOME").ok().filter(|h| !h.trim().is_empty());
+    let home = std::env::var("HERMES_HOME")
+        .ok()
+        .filter(|h| !h.trim().is_empty());
     let base = home.map(PathBuf::from).unwrap_or_else(|| {
         std::env::var("USERPROFILE")
             .or_else(|_| std::env::var("HOME"))
@@ -73,7 +75,11 @@ pub fn execute_view(args: &Value) -> String {
 
 /// `execute_view` against an explicit root (tests, embedding hosts).
 pub fn execute_view_in(root: &Path, args: &Value) -> String {
-    let Some(name) = args.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()) else {
+    let Some(name) = args
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|n| !n.trim().is_empty())
+    else {
         return crate::util::tool_error("skill_view: 'name' is required");
     };
     let file_path = args.get("file_path").and_then(Value::as_str);
@@ -93,8 +99,16 @@ pub fn execute_view_in(root: &Path, args: &Value) -> String {
         Err(e) => return crate::util::tool_error(&format!("Failed to read skill '{name}': {e}")),
     };
     let (frontmatter, _body) = parse_frontmatter(&content);
-    let description = frontmatter.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let rel_path = skill_md.strip_prefix(root).unwrap_or(&skill_md).display().to_string();
+    let description = frontmatter
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let rel_path = skill_md
+        .strip_prefix(root)
+        .unwrap_or(&skill_md)
+        .display()
+        .to_string();
     let files = linked_files(&skill_dir);
     let linked: serde_json::Map<String, Value> = files
         .into_iter()
@@ -155,8 +169,14 @@ fn serve_linked_file(name: &str, skill_dir: &Path, file_path: &str) -> String {
         })
         .to_string(),
         Err(e) => {
-            let hint = if e.kind() == std::io::ErrorKind::NotFound { " (check the linked_files listing)" } else { "" };
-            crate::util::tool_error(&format!("Could not read '{file_path}' in skill '{name}': {e}{hint}"))
+            let hint = if e.kind() == std::io::ErrorKind::NotFound {
+                " (check the linked_files listing)"
+            } else {
+                ""
+            };
+            crate::util::tool_error(&format!(
+                "Could not read '{file_path}' in skill '{name}': {e}{hint}"
+            ))
         }
     }
 }
@@ -171,19 +191,34 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "hermes-tools-skills-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
 
-    fn make_skill(root: &Path, category: Option<&str>, dir_name: &str, name: &str, description: &str) -> PathBuf {
-        let base = if let Some(category) = category { root.join(category) } else { root.to_path_buf() };
+    fn make_skill(
+        root: &Path,
+        category: Option<&str>,
+        dir_name: &str,
+        name: &str,
+        description: &str,
+    ) -> PathBuf {
+        let base = if let Some(category) = category {
+            root.join(category)
+        } else {
+            root.to_path_buf()
+        };
         let dir = base.join(dir_name);
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n\nBody here.\n"),
+            format!(
+                "---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n\nBody here.\n"
+            ),
         )
         .unwrap();
         dir
@@ -192,11 +227,28 @@ mod tests {
     #[test]
     fn list_reports_name_description_category_and_filters() {
         let root = tmp_root();
-        make_skill(&root, Some("devops"), "deploy", "deploy", "Ship things safely.");
-        make_skill(&root, None, "writing", "humanizer", "Strip AI-isms from text.");
+        make_skill(
+            &root,
+            Some("devops"),
+            "deploy",
+            "deploy",
+            "Ship things safely.",
+        );
+        make_skill(
+            &root,
+            None,
+            "writing",
+            "humanizer",
+            "Strip AI-isms from text.",
+        );
         let out = v(&execute_list_in(&root, &json!({})));
         assert_eq!(out["count"], 2);
-        let names: Vec<&str> = out["skills"].as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = out["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
         assert!(names.contains(&"deploy") && names.contains(&"humanizer"));
 
         let out = v(&execute_list_in(&root, &json!({"category": "devops"})));
@@ -211,7 +263,11 @@ mod tests {
         let root = tmp_root();
         let dir = make_skill(&root, None, "deploy", "deploy", "Ship things safely.");
         fs::create_dir_all(dir.join("references")).unwrap();
-        fs::write(dir.join("references").join("api.md"), "## API\n\nEndpoints.").unwrap();
+        fs::write(
+            dir.join("references").join("api.md"),
+            "## API\n\nEndpoints.",
+        )
+        .unwrap();
         let out = v(&execute_view_in(&root, &json!({"name": "deploy"})));
         assert_eq!(out["success"], true);
         assert_eq!(out["description"], "Ship things safely.");
@@ -240,15 +296,27 @@ mod tests {
         let dir = make_skill(&root, None, "deploy", "deploy", "Ship things safely.");
         fs::create_dir_all(dir.join("references")).unwrap();
         fs::write(dir.join("references").join("api.md"), "## API").unwrap();
-        let out = v(&execute_view_in(&root, &json!({"name": "deploy", "file_path": "references/api.md"})));
+        let out = v(&execute_view_in(
+            &root,
+            &json!({"name": "deploy", "file_path": "references/api.md"}),
+        ));
         assert_eq!(out["content"], "## API");
 
         let secret = root.join("outside.md");
         fs::write(&secret, "secrets").unwrap();
-        let out = v(&execute_view_in(&root, &json!({"name": "deploy", "file_path": "../../outside.md"})));
+        let out = v(&execute_view_in(
+            &root,
+            &json!({"name": "deploy", "file_path": "../../outside.md"}),
+        ));
         assert!(out.get("error").is_some(), "{out}");
-        let out = v(&execute_view_in(&root, &json!({"name": "deploy", "file_path": "missing.md"})));
-        assert!(out["error"].as_str().unwrap().contains("Could not read"), "{out}");
+        let out = v(&execute_view_in(
+            &root,
+            &json!({"name": "deploy", "file_path": "missing.md"}),
+        ));
+        assert!(
+            out["error"].as_str().unwrap().contains("Could not read"),
+            "{out}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -256,9 +324,15 @@ mod tests {
     fn view_requires_name_and_reports_not_found() {
         let root = tmp_root();
         let out = v(&execute_view_in(&root, &json!({})));
-        assert!(out["error"].as_str().unwrap().contains("'name' is required"));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("'name' is required"));
         let out = v(&execute_view_in(&root, &json!({"name": "nope"})));
-        assert!(out["error"].as_str().unwrap().contains("Skill 'nope' not found"));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("Skill 'nope' not found"));
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -332,16 +406,23 @@ fn validate_frontmatter(content: &str, new_skill: bool) -> Result<(), String> {
     }
     let content = content.trim_start_matches('\u{feff}');
     if !content.starts_with("---") {
-        return Err("SKILL.md must start with YAML frontmatter (---). See existing skills for format.".into());
+        return Err(
+            "SKILL.md must start with YAML frontmatter (---). See existing skills for format."
+                .into(),
+        );
     }
     let rest = &content[3..];
     let Some(end) = rest.find("\n---") else {
-        return Err("SKILL.md frontmatter is not closed. Ensure you have a closing '---' line.".into());
+        return Err(
+            "SKILL.md frontmatter is not closed. Ensure you have a closing '---' line.".into(),
+        );
     };
     let mut name: Option<String> = None;
     let mut description: Option<String> = None;
     for line in rest[..end].lines() {
-        let Some((key, value)) = line.split_once(':') else { continue };
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
         match key.trim() {
             "name" => name = Some(unquote(value.trim())),
             "description" => description = Some(unquote(value.trim())),
@@ -353,7 +434,9 @@ fn validate_frontmatter(content: &str, new_skill: bool) -> Result<(), String> {
     }
     let desc = description.unwrap_or_default();
     if desc.len() > MAX_DESCRIPTION_LENGTH {
-        return Err(format!("Description exceeds {MAX_DESCRIPTION_LENGTH} characters."));
+        return Err(format!(
+            "Description exceeds {MAX_DESCRIPTION_LENGTH} characters."
+        ));
     }
     if new_skill && desc.trim().trim_matches(['\'', '"']).len() > 255 {
         return Err(format!(
@@ -363,14 +446,20 @@ fn validate_frontmatter(content: &str, new_skill: bool) -> Result<(), String> {
     }
     let body = &rest[end + 4..];
     if body.trim().is_empty() {
-        return Err("SKILL.md must have content after the frontmatter (instructions, procedures, etc.).".into());
+        return Err(
+            "SKILL.md must have content after the frontmatter (instructions, procedures, etc.)."
+                .into(),
+        );
     }
     Ok(())
 }
 
 fn unquote(value: &str) -> String {
     let value = value.trim();
-    if value.len() >= 2 && (value.starts_with('"') && value.ends_with('"') || value.starts_with('\'') && value.ends_with('\'')) {
+    if value.len() >= 2
+        && (value.starts_with('"') && value.ends_with('"')
+            || value.starts_with('\'') && value.ends_with('\''))
+    {
         return value[1..value.len() - 1].to_string();
     }
     value.to_string()
@@ -393,16 +482,26 @@ pub fn validate_file_path(file_path: &str) -> Result<(), String> {
         return Err("file_path is required.".into());
     }
     let path = Path::new(file_path);
-    if path.components().any(|c| c == std::path::Component::ParentDir) {
+    if path
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
         return Err("Path traversal ('..') is not allowed.".into());
     }
-    if path.is_absolute() || file_path.starts_with('/') || file_path.starts_with('\\') || file_path.len() >= 2 && file_path.as_bytes()[1] == b':' {
+    if path.is_absolute()
+        || file_path.starts_with('/')
+        || file_path.starts_with('\\')
+        || file_path.len() >= 2 && file_path.as_bytes()[1] == b':'
+    {
         return Err(format!(
             "File must be under one of: {}. Got: '{file_path}'",
             ALLOWED_SUBDIRS.join(", ")
         ));
     }
-    let parts: Vec<&str> = file_path.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    let parts: Vec<&str> = file_path
+        .split(['/', '\\'])
+        .filter(|p| !p.is_empty())
+        .collect();
     if parts.last() == Some(&"SKILL.md") && (1..=2).contains(&parts.len()) {
         return Ok(());
     }
@@ -435,13 +534,21 @@ pub fn execute_manage_in(root: &Path, args: &Value) -> String {
     let ops: Vec<Value> = match args.get("operations") {
         Some(Value::Array(ops)) => ops.clone(),
         _ if args.get("action").is_some() => vec![args.clone()],
-        _ => return crate::util::tool_error("skill_manage requires an operations array (a single edit is a list of one)."),
+        _ => {
+            return crate::util::tool_error(
+                "skill_manage requires an operations array (a single edit is a list of one).",
+            )
+        }
     };
     if ops.is_empty() {
         return crate::util::tool_error("operations must contain at least one op.");
     }
     // delete is the sole op only.
-    if ops.len() > 1 && ops.iter().any(|op| op.get("action").and_then(Value::as_str) == Some("delete")) {
+    if ops.len() > 1
+        && ops
+            .iter()
+            .any(|op| op.get("action").and_then(Value::as_str) == Some("delete"))
+    {
         return crate::util::tool_error("delete must be the only operation in the batch.");
     }
 
@@ -462,7 +569,11 @@ pub fn execute_manage_in(root: &Path, args: &Value) -> String {
         let dir = if let Some(skill_md) = locate_skill(root, name) {
             match skill_md.parent().map(Path::to_path_buf) {
                 Some(dir) => Some(dir),
-                None => return crate::util::tool_error(&format!("Skill '{name}' has no parent directory.")),
+                None => {
+                    return crate::util::tool_error(&format!(
+                        "Skill '{name}' has no parent directory."
+                    ))
+                }
             }
         } else {
             None
@@ -511,7 +622,9 @@ fn snapshot_dir(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut out = Vec::new();
     walk(dir, dir, &mut out);
     fn walk(root: &Path, dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -531,13 +644,16 @@ fn rollback(snapshots: &[(PathBuf, Vec<(PathBuf, Vec<u8>)>)]) {
             let _ = std::fs::write(path, bytes);
         }
         // Best-effort removal of files the batch created inside `dir`.
-        let known: std::collections::HashSet<&Path> = files.iter().map(|(p, _)| p.as_path()).collect();
+        let known: std::collections::HashSet<&Path> =
+            files.iter().map(|(p, _)| p.as_path()).collect();
         strip_new_files(dir, &known);
     }
 }
 
 fn strip_new_files(dir: &Path, known: &std::collections::HashSet<&Path>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -550,7 +666,12 @@ fn strip_new_files(dir: &Path, known: &std::collections::HashSet<&Path>) {
 }
 
 fn apply_op(root: &Path, op: &Value) -> Result<Value, String> {
-    let action = op.get("action").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
+    let action = op
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
     let raw_name = op.get("name").and_then(Value::as_str).unwrap_or("").trim();
     let (name, category) = split_category(raw_name);
     let content = op.get("content").and_then(Value::as_str);
@@ -558,7 +679,10 @@ fn apply_op(root: &Path, op: &Value) -> Result<Value, String> {
     let file_content = op.get("file_content").and_then(Value::as_str).unwrap_or("");
     let old_string = op.get("old_string").and_then(Value::as_str);
     let new_string = op.get("new_string").and_then(Value::as_str);
-    let replace_all = op.get("replace_all").and_then(Value::as_bool).unwrap_or(false);
+    let replace_all = op
+        .get("replace_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let absorbed_into = op.get("absorbed_into").and_then(Value::as_str);
 
     match action.as_str() {
@@ -751,7 +875,8 @@ fn rewrite(root: &Path, name: &str, content: &str) -> Result<Value, String> {
         return Err(e);
     }
     let dir = locate_dir(root, name)?;
-    std::fs::write(dir.join("SKILL.md"), content).map_err(|e| format!("failed to write SKILL.md: {e}"))?;
+    std::fs::write(dir.join("SKILL.md"), content)
+        .map_err(|e| format!("failed to write SKILL.md: {e}"))?;
     Ok(json!({
         "success": true,
         "action": "patch",
@@ -782,13 +907,17 @@ mod manage_tests {
         let dir = std::env::temp_dir().join(format!(
             "hermes-skillmgr-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
 
-    const SKILL_MD: &str = "---\nname: deploy\ndescription: Ship things safely.\n---\n\n# deploy\n\nBody here.\n";
+    const SKILL_MD: &str =
+        "---\nname: deploy\ndescription: Ship things safely.\n---\n\n# deploy\n\nBody here.\n";
 
     fn seed(root: &Path) -> PathBuf {
         let dir = root.join("deploy");
@@ -804,23 +933,41 @@ mod manage_tests {
     #[test]
     fn create_writes_skill_md_and_requires_frontmatter() {
         let root = tmp_root();
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "new-skill", "action": "create", "category": "devops",
-                             "content": "---\nname: new-skill\ndescription: Does the thing.\n---\n\n# new-skill\n\nBody." }],
-        })));
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "new-skill", "action": "create", "category": "devops",
+                                 "content": "---\nname: new-skill\ndescription: Does the thing.\n---\n\n# new-skill\n\nBody." }],
+            }),
+        ));
         assert_eq!(out["applied"], 1, "{out}");
         let created = root.join("devops").join("new-skill").join("SKILL.md");
         assert!(created.exists(), "{}", created.display());
         // Duplicate create fails.
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "new-skill", "action": "create", "content": "---\nname: new-skill\ndescription: d\n---\n\nbody" }],
-        })));
-        assert!(out["error"].as_str().unwrap().contains("already exists"), "{out}");
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "new-skill", "action": "create", "content": "---\nname: new-skill\ndescription: d\n---\n\nbody" }],
+            }),
+        ));
+        assert!(
+            out["error"].as_str().unwrap().contains("already exists"),
+            "{out}"
+        );
         // Missing frontmatter fields fail.
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "bad", "action": "create", "content": "---\nnope: 1\n---\n\nbody" }],
-        })));
-        assert!(out["error"].as_str().unwrap().contains("'name' and 'description'"), "{out}");
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "bad", "action": "create", "content": "---\nnope: 1\n---\n\nbody" }],
+            }),
+        ));
+        assert!(
+            out["error"]
+                .as_str()
+                .unwrap()
+                .contains("'name' and 'description'"),
+            "{out}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -828,15 +975,24 @@ mod manage_tests {
     fn invalid_names_and_categories_are_rejected_before_touching_disk() {
         let root = tmp_root();
         for bad in ["UPPER", "-lead", "has space", "a/b"] {
-            let out = v(&execute_manage_in(&root, &json!({
-                "operations": [{ "name": bad, "action": "create", "content": "x" }],
-            })));
+            let out = v(&execute_manage_in(
+                &root,
+                &json!({
+                    "operations": [{ "name": bad, "action": "create", "content": "x" }],
+                }),
+            ));
             assert!(out.get("error").is_some(), "{bad}: {out}");
         }
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "ok", "action": "create", "category": "deep/nested", "content": "x" }],
-        })));
-        assert!(out["error"].as_str().unwrap().contains("single directory"), "{out}");
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "ok", "action": "create", "category": "deep/nested", "content": "x" }],
+            }),
+        ));
+        assert!(
+            out["error"].as_str().unwrap().contains("single directory"),
+            "{out}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -844,30 +1000,48 @@ mod manage_tests {
     fn patch_replaces_unique_match_and_requires_replace_all_for_many() {
         let root = tmp_root();
         seed(&root);
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "deploy", "action": "patch",
-                             "old_string": "Body here.", "new_string": "Body rewritten." }],
-        })));
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "deploy", "action": "patch",
+                                 "old_string": "Body here.", "new_string": "Body rewritten." }],
+            }),
+        ));
         assert_eq!(out["success"], true, "{out}");
         let updated = fs::read_to_string(root.join("deploy").join("SKILL.md")).unwrap();
         assert!(updated.contains("Body rewritten."));
 
         // Many matches without replace_all fail with the count.
         fs::write(root.join("deploy").join("SKILL.md"), "dup dup dup").unwrap();
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "deploy", "action": "patch", "old_string": "dup", "new_string": "x" }],
-        })));
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "deploy", "action": "patch", "old_string": "dup", "new_string": "x" }],
+            }),
+        ));
         assert!(out["error"].as_str().unwrap().contains("3 times"), "{out}");
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "deploy", "action": "patch", "old_string": "dup", "new_string": "x", "replace_all": true }],
-        })));
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "deploy", "action": "patch", "old_string": "dup", "new_string": "x", "replace_all": true }],
+            }),
+        ));
         assert_eq!(out["success"], true);
-        assert_eq!(fs::read_to_string(root.join("deploy").join("SKILL.md")).unwrap(), "x x x");
+        assert_eq!(
+            fs::read_to_string(root.join("deploy").join("SKILL.md")).unwrap(),
+            "x x x"
+        );
         // A no-match is an error, not a silent no-op.
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "deploy", "action": "patch", "old_string": "absent", "new_string": "x" }],
-        })));
-        assert!(out["error"].as_str().unwrap().contains("not found"), "{out}");
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "deploy", "action": "patch", "old_string": "absent", "new_string": "x" }],
+            }),
+        ));
+        assert!(
+            out["error"].as_str().unwrap().contains("not found"),
+            "{out}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -875,17 +1049,26 @@ mod manage_tests {
     fn content_alone_is_a_full_rewrite() {
         let root = tmp_root();
         seed(&root);
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "deploy", "action": "patch",
-                             "content": "---\nname: deploy\ndescription: Rewritten.\n---\n\nNew body." }],
-        })));
-        assert_eq!(out["operations"][0]["message"], "Skill 'deploy' updated (full rewrite).");
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "deploy", "action": "patch",
+                                 "content": "---\nname: deploy\ndescription: Rewritten.\n---\n\nNew body." }],
+            }),
+        ));
+        assert_eq!(
+            out["operations"][0]["message"],
+            "Skill 'deploy' updated (full rewrite)."
+        );
         let updated = fs::read_to_string(root.join("deploy").join("SKILL.md")).unwrap();
         assert!(updated.contains("New body."));
         // Content + old_string together is rejected.
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "deploy", "action": "patch", "content": "y", "old_string": "a", "new_string": "b" }],
-        })));
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "deploy", "action": "patch", "content": "y", "old_string": "a", "new_string": "b" }],
+            }),
+        ));
         assert!(out["error"].as_str().unwrap().contains("not both"), "{out}");
         let _ = fs::remove_dir_all(&root);
     }
@@ -894,24 +1077,40 @@ mod manage_tests {
     fn write_and_remove_supporting_files_within_allowed_subdirs() {
         let root = tmp_root();
         seed(&root);
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "deploy", "action": "write_file",
-                             "file_path": "references/api.md", "file_content": "## API" }],
-        })));
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "deploy", "action": "write_file",
+                                 "file_path": "references/api.md", "file_content": "## API" }],
+            }),
+        ));
         assert_eq!(out["success"], true, "{out}");
-        assert_eq!(fs::read_to_string(root.join("deploy").join("references").join("api.md")).unwrap(), "## API");
+        assert_eq!(
+            fs::read_to_string(root.join("deploy").join("references").join("api.md")).unwrap(),
+            "## API"
+        );
         // Path rules: traversal, absolute, non-allowed top dir.
         for bad in ["../../etc/passwd", "C:/x.md", "src/main.rs", "references"] {
-            let out = v(&execute_manage_in(&root, &json!({
-                "operations": [{ "name": "deploy", "action": "write_file", "file_path": bad, "file_content": "x" }],
-            })));
+            let out = v(&execute_manage_in(
+                &root,
+                &json!({
+                    "operations": [{ "name": "deploy", "action": "write_file", "file_path": bad, "file_content": "x" }],
+                }),
+            ));
             assert!(out.get("error").is_some(), "{bad}: {out}");
         }
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "deploy", "action": "remove_file", "file_path": "references/api.md" }],
-        })));
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "deploy", "action": "remove_file", "file_path": "references/api.md" }],
+            }),
+        ));
         assert_eq!(out["success"], true);
-        assert!(!root.join("deploy").join("references").join("api.md").exists());
+        assert!(!root
+            .join("deploy")
+            .join("references")
+            .join("api.md")
+            .exists());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -919,24 +1118,45 @@ mod manage_tests {
     fn delete_requires_sole_op_and_validates_absorbed_into() {
         let root = tmp_root();
         seed(&root);
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [
-                { "name": "deploy", "action": "delete" },
-                { "name": "other", "action": "create", "content": "x" },
-            ],
-        })));
-        assert!(out["error"].as_str().unwrap().contains("only operation"), "{out}");
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "deploy", "action": "delete", "absorbed_into": "deploy" }],
-        })));
-        assert!(out["error"].as_str().unwrap().contains("cannot equal"), "{out}");
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "deploy", "action": "delete", "absorbed_into": "ghost" }],
-        })));
-        assert!(out["error"].as_str().unwrap().contains("does not exist"), "{out}");
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [{ "name": "deploy", "action": "delete" }],
-        })));
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [
+                    { "name": "deploy", "action": "delete" },
+                    { "name": "other", "action": "create", "content": "x" },
+                ],
+            }),
+        ));
+        assert!(
+            out["error"].as_str().unwrap().contains("only operation"),
+            "{out}"
+        );
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "deploy", "action": "delete", "absorbed_into": "deploy" }],
+            }),
+        ));
+        assert!(
+            out["error"].as_str().unwrap().contains("cannot equal"),
+            "{out}"
+        );
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "deploy", "action": "delete", "absorbed_into": "ghost" }],
+            }),
+        ));
+        assert!(
+            out["error"].as_str().unwrap().contains("does not exist"),
+            "{out}"
+        );
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [{ "name": "deploy", "action": "delete" }],
+            }),
+        ));
         assert_eq!(out["success"], true, "{out}");
         assert!(!root.join("deploy").exists());
         let _ = fs::remove_dir_all(&root);
@@ -948,19 +1168,25 @@ mod manage_tests {
         seed(&root);
         // op 2 patches deploy; op 3 creates a new skill whose content is
         // broken — the whole batch rolls back to the seeded state.
-        let out = v(&execute_manage_in(&root, &json!({
-            "operations": [
-                { "name": "deploy", "action": "patch", "old_string": "Body here.", "new_string": "CHANGED" },
-                { "name": "fresh", "action": "create", "content": "not valid frontmatter" },
-            ],
-        })));
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "operations": [
+                    { "name": "deploy", "action": "patch", "old_string": "Body here.", "new_string": "CHANGED" },
+                    { "name": "fresh", "action": "create", "content": "not valid frontmatter" },
+                ],
+            }),
+        ));
         assert!(out.get("error").is_some(), "{out}");
         assert_eq!(
             fs::read_to_string(root.join("deploy").join("SKILL.md")).unwrap(),
             SKILL_MD,
             "the patch rolled back"
         );
-        assert!(!root.join("fresh").exists(), "the half-created skill rolled back");
+        assert!(
+            !root.join("fresh").exists(),
+            "the half-created skill rolled back"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -968,12 +1194,17 @@ mod manage_tests {
     fn flat_legacy_shape_is_accepted() {
         let root = tmp_root();
         seed(&root);
-        let out = v(&execute_manage_in(&root, &json!({
-            "action": "patch", "name": "deploy",
-            "old_string": "Body here.", "new_string": "Flat-edited.",
-        })));
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({
+                "action": "patch", "name": "deploy",
+                "old_string": "Body here.", "new_string": "Flat-edited.",
+            }),
+        ));
         assert_eq!(out["success"], true, "{out}");
-        assert!(fs::read_to_string(root.join("deploy").join("SKILL.md")).unwrap().contains("Flat-edited."));
+        assert!(fs::read_to_string(root.join("deploy").join("SKILL.md"))
+            .unwrap()
+            .contains("Flat-edited."));
         let _ = fs::remove_dir_all(&root);
     }
 }

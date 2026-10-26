@@ -65,7 +65,9 @@ fn flatten(message: &Message) -> (String, String) {
     for content in &message.content {
         match content {
             Content::Text { text } => parts.push(text.clone()),
-            Content::ToolUse { call } => parts.push(format!("[tool_use {}] {}", call.name, call.arguments)),
+            Content::ToolUse { call } => {
+                parts.push(format!("[tool_use {}] {}", call.name, call.arguments))
+            }
             Content::ToolResult { call_id, output } => {
                 parts.push(format!("[tool_result {call_id}] {output}"))
             }
@@ -125,7 +127,12 @@ pub fn execute(args: &Value) -> String {
 pub fn execute_in(path: &PathBuf, args: &Value) -> String {
     let messages = load_messages(path);
     let around = args.get("around_message_id").and_then(Value::as_i64);
-    let query = args.get("query").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
     // Scroll wins when an anchor is set (the Python's `_dispatch` order).
     if let Some(anchor) = around {
@@ -163,13 +170,19 @@ fn browse(messages: &[(String, String)]) -> String {
 
 fn discover(messages: &[(String, String)], query: &str, args: &Value) -> String {
     let roles = parse_role_filter(args);
-    let limit = clamp(args.get("limit").and_then(Value::as_i64), DISCOVERY_LIMIT_DEFAULT, 1, DISCOVERY_LIMIT_CAP);
+    let limit = clamp(
+        args.get("limit").and_then(Value::as_i64),
+        DISCOVERY_LIMIT_DEFAULT,
+        1,
+        DISCOVERY_LIMIT_CAP,
+    );
     let query_lower = query.to_lowercase();
     let matches: Vec<usize> = messages
         .iter()
         .enumerate()
         .filter(|(_, (role, text))| {
-            (roles.is_empty() || roles.iter().any(|r| r == role)) && text.to_lowercase().contains(&query_lower)
+            (roles.is_empty() || roles.iter().any(|r| r == role))
+                && text.to_lowercase().contains(&query_lower)
         })
         .map(|(index, _)| index)
         .collect();
@@ -213,7 +226,12 @@ fn hydrate_top(messages: &[(String, String)], matches: &[usize], limit: usize) -
 }
 
 fn scroll(messages: &[(String, String)], anchor: i64, args: &Value) -> String {
-    let window = clamp(args.get("window").and_then(Value::as_i64), SCROLL_WINDOW_DEFAULT, 1, SCROLL_WINDOW_CAP);
+    let window = clamp(
+        args.get("window").and_then(Value::as_i64),
+        SCROLL_WINDOW_DEFAULT,
+        1,
+        SCROLL_WINDOW_CAP,
+    );
     if anchor < 0 || anchor as usize >= messages.len() {
         return crate::util::tool_error(&format!(
             "around_message_id {anchor} not in session (valid ids: 0..{}).",
@@ -259,10 +277,16 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "hermes-tools-sess-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
         ));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let body: String = lines.iter().map(|m| serde_json::to_string(m).unwrap() + "\n").collect();
+        let body: String = lines
+            .iter()
+            .map(|m| serde_json::to_string(m).unwrap() + "\n")
+            .collect();
         fs::write(&path, body).unwrap();
         path
     }
@@ -286,7 +310,14 @@ mod tests {
         let results = out["results"].as_array().unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0]["match_message_id"], 0);
-        assert!(results[0]["message"].as_str().unwrap().contains("cargo ship"), "{}", out);
+        assert!(
+            results[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("cargo ship"),
+            "{}",
+            out
+        );
         assert!(results[1].get("message").map_or(true, |m| m.is_null()));
         assert!(results[1]["snippet"].as_str().unwrap().len() > 0);
         let _ = fs::remove_file(&path);
@@ -300,7 +331,10 @@ mod tests {
 
         // Default filter is user,assistant — tool output is usually noise.
         let path = tmp_store(&transcript());
-        let out = v(&execute_in(&path, &json!({"query": "tool_result", "role_filter": "tool"})));
+        let out = v(&execute_in(
+            &path,
+            &json!({"query": "tool_result", "role_filter": "tool"}),
+        ));
         assert_eq!(out["total_matches"], 0);
         let _ = fs::remove_file(&path);
     }
@@ -308,7 +342,10 @@ mod tests {
     #[test]
     fn scroll_windows_clamp_and_repeat_the_boundary() {
         let path = tmp_store(&transcript());
-        let out = v(&execute_in(&path, &json!({"around_message_id": 1, "window": 2})));
+        let out = v(&execute_in(
+            &path,
+            &json!({"around_message_id": 1, "window": 2}),
+        ));
         assert_eq!(out["mode"], "scroll");
         let ids: Vec<i64> = out["messages"]
             .as_array()
@@ -321,7 +358,10 @@ mod tests {
         assert_eq!(out["messages_after"], 1);
 
         // window=0 clamps to 1; the anchor is always included.
-        let out = v(&execute_in(&path, &json!({"around_message_id": 3, "window": 0})));
+        let out = v(&execute_in(
+            &path,
+            &json!({"around_message_id": 3, "window": 0}),
+        ));
         let ids: Vec<i64> = out["messages"]
             .as_array()
             .unwrap()
@@ -336,7 +376,10 @@ mod tests {
     fn out_of_range_anchor_is_an_error() {
         let path = tmp_store(&transcript());
         let out = v(&execute_in(&path, &json!({"around_message_id": 99})));
-        assert!(out["error"].as_str().unwrap().contains("around_message_id 99 not in session"));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("around_message_id 99 not in session"));
         let _ = fs::remove_file(&path);
     }
 
@@ -362,7 +405,10 @@ mod tests {
     #[test]
     fn tool_use_and_result_flatten_to_searchable_text() {
         let path = tmp_store(&transcript());
-        let out = v(&execute_in(&path, &json!({"query": "pipeline", "role_filter": "user"})));
+        let out = v(&execute_in(
+            &path,
+            &json!({"query": "pipeline", "role_filter": "user"}),
+        ));
         assert_eq!(out["results"].as_array().unwrap()[0]["role"], "user");
         let _ = fs::remove_file(&path);
     }

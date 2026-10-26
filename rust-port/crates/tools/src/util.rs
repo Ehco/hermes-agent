@@ -166,14 +166,26 @@ mod tests {
     #[test]
     fn read_pagination_clamps() {
         assert_eq!(normalize_read_pagination(Some(0), Some(0)), (1, 1));
-        assert_eq!(normalize_read_pagination(Some(-5), Some(99_999)), (1, MAX_LINES));
-        assert_eq!(normalize_read_pagination(None, None), (1, DEFAULT_READ_LIMIT));
+        assert_eq!(
+            normalize_read_pagination(Some(-5), Some(99_999)),
+            (1, MAX_LINES)
+        );
+        assert_eq!(
+            normalize_read_pagination(None, None),
+            (1, DEFAULT_READ_LIMIT)
+        );
     }
 
     #[test]
     fn search_pagination_clamps() {
-        assert_eq!(normalize_search_pagination(Some(-1), None), (0, DEFAULT_SEARCH_LIMIT));
-        assert_eq!(normalize_search_pagination(Some(4), Some(10_000)), (4, MAX_LINES));
+        assert_eq!(
+            normalize_search_pagination(Some(-1), None),
+            (0, DEFAULT_SEARCH_LIMIT)
+        );
+        assert_eq!(
+            normalize_search_pagination(Some(4), Some(10_000)),
+            (4, MAX_LINES)
+        );
     }
 
     #[test]

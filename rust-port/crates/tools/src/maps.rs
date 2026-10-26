@@ -23,7 +23,11 @@ pub const TIMEAPI_BASE: &str = "https://timeapi.io/api/timezone/coordinate";
 pub const USER_AGENT: &str = "HermesAgent/1.0 (contact: hermes@agent.ai)";
 
 /// `OSRM_PROFILES`: the agent-facing mode → OSRM profile.
-pub const OSRM_PROFILES: &[(&str, &str)] = &[("driving", "driving"), ("walking", "foot"), ("cycling", "bike")];
+pub const OSRM_PROFILES: &[(&str, &str)] = &[
+    ("driving", "driving"),
+    ("walking", "foot"),
+    ("cycling", "bike"),
+];
 
 /// One authenticated-less GET returning a JSON body.
 pub trait HttpGet: Send + Sync {
@@ -63,7 +67,9 @@ fn valid_coord(lat: f64, lon: f64) -> bool {
 
 /// Nominatim search rows → compact `{name, lat, lon, type, display_name}`.
 pub fn parse_search_results(body: &str) -> Vec<Value> {
-    let Ok(rows) = serde_json::from_str::<Value>(body) else { return Vec::new() };
+    let Ok(rows) = serde_json::from_str::<Value>(body) else {
+        return Vec::new();
+    };
     rows.as_array()
         .map(|arr| {
             arr.iter()
@@ -83,13 +89,19 @@ pub fn parse_search_results(body: &str) -> Vec<Value> {
 
 /// OSRM route body → `(duration_s, distance_m)`.
 pub fn parse_route(body: &str) -> Result<(f64, f64), String> {
-    let parsed: Value = serde_json::from_str(body).map_err(|e| format!("OSRM returned invalid JSON: {e}"))?;
+    let parsed: Value =
+        serde_json::from_str(body).map_err(|e| format!("OSRM returned invalid JSON: {e}"))?;
     if parsed.get("code").and_then(Value::as_str) != Some("Ok") {
         let message = parsed
             .get("message")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .or_else(|| parsed.get("code").and_then(Value::as_str).map(str::to_string))
+            .or_else(|| {
+                parsed
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
             .unwrap_or_else(|| "unknown error".to_string());
         return Err(format!("OSRM routing failed: {message}"));
     }
@@ -137,9 +149,22 @@ fn geocode_single(getter: &dyn HttpGet, query: &str) -> Result<(f64, f64, String
     let first = rows
         .first()
         .ok_or_else(|| format!("No results for {query:?}."))?;
-    let lat = first["lat"].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-    let lon = first["lon"].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-    Ok((lat, lon, first["display_name"].as_str().unwrap_or_default().to_string()))
+    let lat = first["lat"]
+        .as_str()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let lon = first["lon"]
+        .as_str()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    Ok((
+        lat,
+        lon,
+        first["display_name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+    ))
 }
 
 /// Minimal form encoding for a single query value.
@@ -147,7 +172,9 @@ fn urlencode(value: &str) -> String {
     let mut out = String::new();
     for b in value.bytes() {
         match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
             b' ' => out.push('+'),
             other => out.push_str(&format!("%{other:02X}")),
         }
@@ -163,7 +190,12 @@ pub fn execute(args: &Value) -> String {
 
 /// `execute` against an injected getter (tests, embedding hosts).
 pub fn execute_with(getter: &dyn HttpGet, args: &Value) -> String {
-    let action = args.get("action").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
+    let action = args
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
     match action.as_str() {
         "search" | "geocode" => search(getter, args),
         "reverse" => reverse(getter, args),
@@ -177,10 +209,18 @@ pub fn execute_with(getter: &dyn HttpGet, args: &Value) -> String {
 }
 
 fn search(getter: &dyn HttpGet, args: &Value) -> String {
-    let Some(query) = args.get("query").and_then(Value::as_str).filter(|q| !q.trim().is_empty()) else {
+    let Some(query) = args
+        .get("query")
+        .and_then(Value::as_str)
+        .filter(|q| !q.trim().is_empty())
+    else {
         return tool_error("query is required for action='search'");
     };
-    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(5).clamp(1, 50);
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(5)
+        .clamp(1, 50);
     let url = format!(
         "{NOMINATIM_SEARCH}?q={}&format=json&limit={limit}&addressdetails=1",
         urlencode(query)
@@ -188,7 +228,8 @@ fn search(getter: &dyn HttpGet, args: &Value) -> String {
     match getter.get(&url) {
         Ok(body) => {
             let rows = parse_search_results(&body);
-            json!({ "success": true, "query": query, "results": rows, "count": rows.len() }).to_string()
+            json!({ "success": true, "query": query, "results": rows, "count": rows.len() })
+                .to_string()
         }
         Err(e) => tool_error(e),
     }
@@ -221,14 +262,22 @@ fn reverse(getter: &dyn HttpGet, args: &Value) -> String {
 }
 
 fn route(getter: &dyn HttpGet, args: &Value, steps: bool) -> String {
-    let Some(mode) = args.get("mode").and_then(Value::as_str).map(|m| m.to_lowercase()) else {
+    let Some(mode) = args
+        .get("mode")
+        .and_then(Value::as_str)
+        .map(|m| m.to_lowercase())
+    else {
         return tool_error("mode is required (driving, walking, cycling)");
     };
     let Some(profile) = osrm_profile(&mode) else {
         return tool_error(format!(
             "Invalid mode '{}'. Choose from: {}",
             mode,
-            OSRM_PROFILES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
+            OSRM_PROFILES
+                .iter()
+                .map(|(n, _)| *n)
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     };
     let (Some(from), Some(to)) = (args.get("from"), args.get("to")) else {
@@ -253,24 +302,22 @@ fn route(getter: &dyn HttpGet, args: &Value, steps: bool) -> String {
     );
     match getter.get(&url) {
         Ok(body) => match parse_route(&body) {
-            Ok((duration, distance)) => {
-                json!({
-                    "success": true,
-                    "from": o_name,
-                    "to": d_name,
-                    "mode": mode,
-                    "duration_s": duration,
-                    "distance_m": distance,
-                    "duration": format_duration(duration),
-                    "distance": format_distance(distance),
-                    "steps": if steps {
-                        json!(steps_list(&body))
-                    } else {
-                        Value::Null
-                    },
-                })
-                .to_string()
-            }
+            Ok((duration, distance)) => json!({
+                "success": true,
+                "from": o_name,
+                "to": d_name,
+                "mode": mode,
+                "duration_s": duration,
+                "distance_m": distance,
+                "duration": format_duration(duration),
+                "distance": format_distance(distance),
+                "steps": if steps {
+                    json!(steps_list(&body))
+                } else {
+                    Value::Null
+                },
+            })
+            .to_string(),
             Err(e) => tool_error(e),
         },
         Err(e) => tool_error(e),
@@ -279,7 +326,9 @@ fn route(getter: &dyn HttpGet, args: &Value, steps: bool) -> String {
 
 /// OSRM `steps=true` turn-by-turn list: `{name, instruction, distance_m}`.
 fn steps_list(body: &str) -> Vec<Value> {
-    let Ok(parsed) = serde_json::from_str::<Value>(body) else { return Vec::new() };
+    let Ok(parsed) = serde_json::from_str::<Value>(body) else {
+        return Vec::new();
+    };
     parsed["routes"][0]["legs"][0]["steps"]
         .as_array()
         .map(|steps| {
@@ -343,14 +392,21 @@ mod tests {
 
     impl StubGetter {
         fn new(responses: Vec<Result<String, String>>) -> Self {
-            Self { responses: Mutex::new(responses), requests: Mutex::new(Vec::new()) }
+            Self {
+                responses: Mutex::new(responses),
+                requests: Mutex::new(Vec::new()),
+            }
         }
     }
 
     impl HttpGet for StubGetter {
         fn get(&self, url: &str) -> Result<String, String> {
             self.requests.lock().unwrap().push(url.to_string());
-            self.responses.lock().unwrap().pop().unwrap_or(Err("no fixture".into()))
+            self.responses
+                .lock()
+                .unwrap()
+                .pop()
+                .unwrap_or(Err("no fixture".into()))
         }
     }
 
@@ -365,7 +421,10 @@ mod tests {
     #[test]
     fn search_uses_nominatim_url_and_returns_rows() {
         let stub = StubGetter::new(vec![Ok(NOMINATIM_ROW.into())]);
-        let out = v(&execute_with(&stub, &json!({"action": "search", "query": "barcelona", "limit": 2})));
+        let out = v(&execute_with(
+            &stub,
+            &json!({"action": "search", "query": "barcelona", "limit": 2}),
+        ));
         assert_eq!(out["success"], true);
         assert_eq!(out["count"], 1);
         assert_eq!(out["results"][0]["name"], "Barcelona");
@@ -377,23 +436,37 @@ mod tests {
 
     #[test]
     fn search_requires_query() {
-        let out = v(&execute_with(&StubGetter::new(vec![]), &json!({"action": "search"})));
+        let out = v(&execute_with(
+            &StubGetter::new(vec![]),
+            &json!({"action": "search"}),
+        ));
         assert!(out["error"].as_str().unwrap().contains("query is required"));
     }
 
     #[test]
     fn reverse_builds_url_and_returns_display_name() {
-        let stub = StubGetter::new(vec![Ok(r#"{"lat":"41.38","lon":"2.17","display_name":"Sagrada Familia"}"#.into())]);
-        let out = v(&execute_with(&stub, &json!({"action": "reverse", "lat": 41.38, "lon": 2.17})));
+        let stub = StubGetter::new(vec![Ok(
+            r#"{"lat":"41.38","lon":"2.17","display_name":"Sagrada Familia"}"#.into(),
+        )]);
+        let out = v(&execute_with(
+            &stub,
+            &json!({"action": "reverse", "lat": 41.38, "lon": 2.17}),
+        ));
         assert_eq!(out["display_name"], "Sagrada Familia");
         assert!(stub.requests.lock().unwrap()[0].starts_with(NOMINATIM_REVERSE));
     }
 
     #[test]
     fn reverse_validates_ranges() {
-        let out = v(&execute_with(&StubGetter::new(vec![]), &json!({"action": "reverse", "lat": 95.0, "lon": 0.0})));
+        let out = v(&execute_with(
+            &StubGetter::new(vec![]),
+            &json!({"action": "reverse", "lat": 95.0, "lon": 0.0}),
+        ));
         assert!(out["error"].as_str().unwrap().contains("within [-90, 90]"));
-        let out = v(&execute_with(&StubGetter::new(vec![]), &json!({"action": "reverse"})));
+        let out = v(&execute_with(
+            &StubGetter::new(vec![]),
+            &json!({"action": "reverse"}),
+        ));
         assert!(out["error"].as_str().unwrap().contains("lat and lon"));
     }
 
@@ -404,7 +477,10 @@ mod tests {
             Ok(NOMINATIM_ROW.into()),
             Ok(r#"[{"lat":"48.8566","lon":"2.3522","name":"Paris","display_name":"Paris, France"}]"#.into()),
         ]);
-        let out = v(&execute_with(&stub, &json!({"action": "distance", "from": "Barcelona", "to": "Paris", "mode": "driving"})));
+        let out = v(&execute_with(
+            &stub,
+            &json!({"action": "distance", "from": "Barcelona", "to": "Paris", "mode": "driving"}),
+        ));
         assert_eq!(out["success"], true);
         assert_eq!(out["mode"], "driving");
         assert_eq!(out["duration_s"], 5043.2);
@@ -413,7 +489,11 @@ mod tests {
         assert_eq!(out["distance"], "81.2 km");
         let reqs = stub.requests.lock().unwrap();
         assert!(reqs[2].contains(OSRM_BASE));
-        assert!(reqs[2].contains("/driving/2.3522,48.8566;2.1769,41.3828"), "{}", reqs[2]);
+        assert!(
+            reqs[2].contains("/driving/2.3522,48.8566;2.1769,41.3828"),
+            "{}",
+            reqs[2]
+        );
         assert!(reqs[2].ends_with("?overview=false&steps=false"));
     }
 
@@ -424,7 +504,10 @@ mod tests {
             Ok(NOMINATIM_ROW.into()),
             Ok(NOMINATIM_ROW.into()),
         ]);
-        let out = v(&execute_with(&stub, &json!({"action": "directions", "from": "Barcelona", "to": "Barcelona", "mode": "walking"})));
+        let out = v(&execute_with(
+            &stub,
+            &json!({"action": "directions", "from": "Barcelona", "to": "Barcelona", "mode": "walking"}),
+        ));
         assert_eq!(out["success"], true);
         let steps = out["steps"].as_array().unwrap();
         assert_eq!(steps.len(), 2);
@@ -436,8 +519,14 @@ mod tests {
 
     #[test]
     fn invalid_mode_is_a_clear_error() {
-        let out = v(&execute_with(&StubGetter::new(vec![]), &json!({"action": "distance", "from": "a", "to": "b", "mode": "swimming"})));
-        assert!(out["error"].as_str().unwrap().contains("Invalid mode 'swimming'"));
+        let out = v(&execute_with(
+            &StubGetter::new(vec![]),
+            &json!({"action": "distance", "from": "a", "to": "b", "mode": "swimming"}),
+        ));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid mode 'swimming'"));
     }
 
     #[test]
@@ -447,14 +536,20 @@ mod tests {
             Ok(NOMINATIM_ROW.into()),
             Ok(NOMINATIM_ROW.into()),
         ]);
-        let out = v(&execute_with(&stub, &json!({"action": "distance", "from": "x", "to": "y", "mode": "cycling"})));
+        let out = v(&execute_with(
+            &stub,
+            &json!({"action": "distance", "from": "x", "to": "y", "mode": "cycling"}),
+        ));
         assert_eq!(out["error"], "OSRM routing failed: No route found");
     }
 
     #[test]
     fn timezone_parses_timeapi_fields() {
         let stub = StubGetter::new(vec![Ok(r#"{"timeZone":"Europe/Madrid","currentLocalTime":"2026-10-26T12:00:00","currentUtcOffset":{"hours":2,"minutes":0}}"#.into())]);
-        let out = v(&execute_with(&stub, &json!({"action": "timezone", "lat": 41.38, "lon": 2.17})));
+        let out = v(&execute_with(
+            &stub,
+            &json!({"action": "timezone", "lat": 41.38, "lon": 2.17}),
+        ));
         assert_eq!(out["timezone"], "Europe/Madrid");
         assert_eq!(out["utc_offset"], 2);
         assert!(stub.requests.lock().unwrap()[0].starts_with(TIMEAPI_BASE));
@@ -462,8 +557,14 @@ mod tests {
 
     #[test]
     fn unknown_action_and_formatting_helpers() {
-        let out = v(&execute_with(&StubGetter::new(vec![]), &json!({"action": "teleport"})));
-        assert!(out["error"].as_str().unwrap().contains("Unknown maps action"));
+        let out = v(&execute_with(
+            &StubGetter::new(vec![]),
+            &json!({"action": "teleport"}),
+        ));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown maps action"));
         assert_eq!(format_duration(4523.0), "1h 15m");
         assert_eq!(format_duration(125.0), "2m 5s");
         assert_eq!(format_duration(7.0), "7s");

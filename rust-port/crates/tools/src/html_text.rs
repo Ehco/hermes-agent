@@ -93,9 +93,8 @@ fn percent_decode(s: &str) -> String {
 /// The page `<title>`, if one is present.
 pub fn extract_title(html: &str) -> Option<String> {
     let re = Regex::new("(?is)<title[^>]*>(.*?)</title>").unwrap();
-    re.captures(html).map(|c| {
-        decode_entities(c.get(1).map(|m| m.as_str()).unwrap_or("").trim())
-    })
+    re.captures(html)
+        .map(|c| decode_entities(c.get(1).map(|m| m.as_str()).unwrap_or("").trim()))
 }
 
 /// Convert an HTML document to readable text.
@@ -219,7 +218,10 @@ fn strip_pair(html: &str, tag: &str) -> String {
         Some(cp) => {
             // Advance past the closing tag's '>'.
             let rest = &html[cp..];
-            let end = rest.find('>').map(|i| cp + i + 1).unwrap_or(rest.len() + cp);
+            let end = rest
+                .find('>')
+                .map(|i| cp + i + 1)
+                .unwrap_or(rest.len() + cp);
             (&html[..open_start], &html[end..])
         }
         None => (&html[..open_start], ""),
@@ -276,7 +278,10 @@ mod tests {
 
     #[test]
     fn entities_decode() {
-        assert_eq!(decode_entities("a &amp; b &#x27; &#62; &nbsp;end"), "a & b ' >  end");
+        assert_eq!(
+            decode_entities("a &amp; b &#x27; &#62; &nbsp;end"),
+            "a & b ' >  end"
+        );
         assert_eq!(decode_entities("&#65;"), "A");
     }
 

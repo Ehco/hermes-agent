@@ -48,7 +48,12 @@ pub fn execute(args: &Value) -> String {
 
 /// `execute` against an explicit cron directory (tests, embedding hosts).
 pub fn execute_in(dir: &PathBuf, args: &Value) -> String {
-    let action = args.get("action").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
+    let action = args
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
     match action.as_str() {
         "create" => create(dir, args),
         "list" => list(dir, args),
@@ -83,14 +88,26 @@ fn job_to_json(job: &CronJob) -> Value {
         "created_at": job.created_at,
     });
     if let Some(err) = &job.last_error {
-        obj.as_object_mut().unwrap().insert("last_error".into(), Value::String(err.clone()));
+        obj.as_object_mut()
+            .unwrap()
+            .insert("last_error".into(), Value::String(err.clone()));
     }
     obj
 }
 
 fn create(dir: &PathBuf, args: &Value) -> String {
-    let prompt = args.get("prompt").and_then(Value::as_str).unwrap_or("").trim().to_string();
-    let schedule_text = args.get("schedule").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let prompt = args
+        .get("prompt")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let schedule_text = args
+        .get("schedule")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if prompt.is_empty() || schedule_text.is_empty() {
         return crate::util::tool_error("action='create' requires both 'schedule' and 'prompt' (the prompt must be self-contained: jobs run in a fresh session with no current-chat context).");
     }
@@ -106,10 +123,18 @@ fn create(dir: &PathBuf, args: &Value) -> String {
         .filter(|n| !n.is_empty())
         .unwrap_or("cron-job");
     let mut job = CronJob::new(name, &prompt, schedule, now);
-    job.max_runs = args.get("repeat").and_then(Value::as_u64).filter(|r| *r >= 1).map(|r| r as u32);
+    job.max_runs = args
+        .get("repeat")
+        .and_then(Value::as_u64)
+        .filter(|r| *r >= 1)
+        .map(|r| r as u32);
     if args.get("paused").and_then(Value::as_bool).unwrap_or(false) {
         job.enabled = false;
-        if let Some(reason) = args.get("paused_reason").and_then(Value::as_str).filter(|r| !r.trim().is_empty()) {
+        if let Some(reason) = args
+            .get("paused_reason")
+            .and_then(Value::as_str)
+            .filter(|r| !r.trim().is_empty())
+        {
             job.last_error = Some(format!("paused at create: {reason}"));
         }
     }
@@ -136,7 +161,10 @@ fn create(dir: &PathBuf, args: &Value) -> String {
 }
 
 fn list(dir: &PathBuf, args: &Value) -> String {
-    let include_disabled = args.get("include_disabled").and_then(Value::as_bool).unwrap_or(true);
+    let include_disabled = args
+        .get("include_disabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let store = JobStore::new(dir);
     let jobs = match store.load() {
         Ok(jobs) => jobs,
@@ -151,10 +179,21 @@ fn list(dir: &PathBuf, args: &Value) -> String {
     json!({ "success": true, "jobs": rows, "count": count }).to_string()
 }
 
-fn mutate_job(dir: &PathBuf, args: &Value, f: impl FnOnce(&mut CronJob, i64) -> Result<String, String>) -> String {
-    let job_id = args.get("job_id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+fn mutate_job(
+    dir: &PathBuf,
+    args: &Value,
+    f: impl FnOnce(&mut CronJob, i64) -> Result<String, String>,
+) -> String {
+    let job_id = args
+        .get("job_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if job_id.is_empty() {
-        return crate::util::tool_error("'job_id' is required (always list first — never guess job IDs).");
+        return crate::util::tool_error(
+            "'job_id' is required (always list first — never guess job IDs).",
+        );
     }
     let store = JobStore::new(dir);
     let mut jobs = match store.load() {
@@ -162,7 +201,9 @@ fn mutate_job(dir: &PathBuf, args: &Value, f: impl FnOnce(&mut CronJob, i64) -> 
         Err(e) => return crate::util::tool_error(&format!("Failed to read the job list: {e}")),
     };
     let Some(idx) = jobs.iter().position(|job| job.id == job_id) else {
-        return crate::util::tool_error(&format!("Job '{job_id}' not found. List jobs to get valid IDs."));
+        return crate::util::tool_error(&format!(
+            "Job '{job_id}' not found. List jobs to get valid IDs."
+        ));
     };
     let now = now_unix();
     let mut job = jobs.remove(idx);
@@ -202,8 +243,8 @@ fn update(dir: &PathBuf, args: &Value) -> String {
         if let Some(schedule_text) = args.get("schedule").and_then(Value::as_str) {
             let schedule_text = schedule_text.trim();
             if !schedule_text.is_empty() {
-                let schedule: Schedule = parse_schedule(schedule_text, now)
-                    .map_err(|e| e.to_string())?;
+                let schedule: Schedule =
+                    parse_schedule(schedule_text, now).map_err(|e| e.to_string())?;
                 job.schedule = schedule;
                 job.next_run_at = compute_next_run(&job.schedule, job.last_run_at, now);
             }
@@ -235,9 +276,16 @@ fn set_enabled(dir: &PathBuf, args: &Value, action: &str) -> String {
 }
 
 fn remove(dir: &PathBuf, args: &Value) -> String {
-    let job_id = args.get("job_id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let job_id = args
+        .get("job_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if job_id.is_empty() {
-        return crate::util::tool_error("'job_id' is required (always list first — never guess job IDs).");
+        return crate::util::tool_error(
+            "'job_id' is required (always list first — never guess job IDs).",
+        );
     }
     let store = JobStore::new(dir);
     let mut jobs = match store.load() {
@@ -245,7 +293,9 @@ fn remove(dir: &PathBuf, args: &Value) -> String {
         Err(e) => return crate::util::tool_error(&format!("Failed to read the job list: {e}")),
     };
     let Some(idx) = jobs.iter().position(|job| job.id == job_id) else {
-        return crate::util::tool_error(&format!("Job '{job_id}' not found. List jobs to get valid IDs."));
+        return crate::util::tool_error(&format!(
+            "Job '{job_id}' not found. List jobs to get valid IDs."
+        ));
     };
     let removed = jobs.remove(idx);
     if let Err(e) = store.save(&jobs) {
@@ -269,7 +319,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "hermes-tools-cron-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -282,12 +335,15 @@ mod tests {
     #[test]
     fn create_list_roundtrip_and_schedules_parse() {
         let dir = tmp_cron_dir();
-        let out = v(&execute_in(&dir, &json!({
-            "action": "create",
-            "schedule": "every 30m",
-            "prompt": "sweep the inbox",
-            "name": "sweeper",
-        })));
+        let out = v(&execute_in(
+            &dir,
+            &json!({
+                "action": "create",
+                "schedule": "every 30m",
+                "prompt": "sweep the inbox",
+                "name": "sweeper",
+            }),
+        ));
         assert_eq!(out["success"], true, "{}", out);
         let id = out["job_id"].as_str().unwrap().to_string();
         assert!(id.starts_with("sweeper-"));
@@ -311,14 +367,30 @@ mod tests {
     #[test]
     fn create_requires_schedule_and_prompt_and_rejects_bad_schedules() {
         let dir = tmp_cron_dir();
-        let out = v(&execute_in(&dir, &json!({"action": "create", "prompt": "x"})));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "create", "prompt": "x"}),
+        ));
         assert!(out["error"].as_str().unwrap().contains("requires both"));
-        let out = v(&execute_in(&dir, &json!({"action": "create", "schedule": "garbage thing", "prompt": "x"})));
-        assert!(out["error"].as_str().unwrap().contains("Invalid schedule"), "{}", out);
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "create", "schedule": "garbage thing", "prompt": "x"}),
+        ));
+        assert!(
+            out["error"].as_str().unwrap().contains("Invalid schedule"),
+            "{}",
+            out
+        );
         // A valid cron expression and one-shot forms parse through the same path.
-        let out = v(&execute_in(&dir, &json!({"action": "create", "schedule": "0 9 * * *", "prompt": "digest"})));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "create", "schedule": "0 9 * * *", "prompt": "digest"}),
+        ));
         assert_eq!(out["success"], true);
-        let out = v(&execute_in(&dir, &json!({"action": "create", "schedule": "in 30m", "prompt": "remind"})));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "create", "schedule": "in 30m", "prompt": "remind"}),
+        ));
         assert_eq!(out["success"], true);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -326,11 +398,20 @@ mod tests {
     #[test]
     fn update_pause_resume_remove_by_id() {
         let dir = tmp_cron_dir();
-        let id = v(&execute_in(&dir, &json!({
-            "action": "create", "schedule": "every 1h", "prompt": "old prompt", "name": "job-a",
-        })))["job_id"].as_str().unwrap().to_string();
+        let id = v(&execute_in(
+            &dir,
+            &json!({
+                "action": "create", "schedule": "every 1h", "prompt": "old prompt", "name": "job-a",
+            }),
+        ))["job_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
-        let out = v(&execute_in(&dir, &json!({"action": "update", "job_id": id, "prompt": "new prompt", "repeat": 3})));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "update", "job_id": id, "prompt": "new prompt", "repeat": 3}),
+        ));
         assert_eq!(out["success"], true);
         assert_eq!(out["job"]["prompt"], "new prompt");
         assert_eq!(out["job"]["max_runs"], 3);
@@ -340,12 +421,18 @@ mod tests {
         // Pausing twice is an explicit no-op error.
         let out = v(&execute_in(&dir, &json!({"action": "pause", "job_id": id})));
         assert!(out["error"].as_str().unwrap().contains("already paused"));
-        let out = v(&execute_in(&dir, &json!({"action": "resume", "job_id": id})));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "resume", "job_id": id}),
+        ));
         assert_eq!(out["job"]["enabled"], true);
         let out = v(&execute_in(&dir, &json!({"action": "list"})));
         assert_eq!(out["jobs"][0]["prompt"], "new prompt");
 
-        let out = v(&execute_in(&dir, &json!({"action": "remove", "job_id": id})));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "remove", "job_id": id}),
+        ));
         assert_eq!(out["success"], true);
         let out = v(&execute_in(&dir, &json!({"action": "list"})));
         assert_eq!(out["count"], 0);
@@ -355,11 +442,24 @@ mod tests {
     #[test]
     fn job_id_is_required_and_unknown_ids_error() {
         let dir = tmp_cron_dir();
-        execute_in(&dir, &json!({"action": "create", "schedule": "every 1h", "prompt": "p"}));
+        execute_in(
+            &dir,
+            &json!({"action": "create", "schedule": "every 1h", "prompt": "p"}),
+        );
         let out = v(&execute_in(&dir, &json!({"action": "remove"})));
-        assert!(out["error"].as_str().unwrap().contains("'job_id' is required"));
-        let out = v(&execute_in(&dir, &json!({"action": "pause", "job_id": "nope-1"})));
-        assert!(out["error"].as_str().unwrap().contains("not found"), "{}", out);
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("'job_id' is required"));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "pause", "job_id": "nope-1"}),
+        ));
+        assert!(
+            out["error"].as_str().unwrap().contains("not found"),
+            "{}",
+            out
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -367,21 +467,33 @@ mod tests {
     fn action_is_required_and_unknown_actions_error() {
         let dir = tmp_cron_dir();
         let out = v(&execute_in(&dir, &json!({})));
-        assert!(out["error"].as_str().unwrap().contains("Missing required parameter"));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("Missing required parameter"));
         let out = v(&execute_in(&dir, &json!({"action": "frobnicate"})));
-        assert!(out["error"].as_str().unwrap().contains("Unknown action 'frobnicate'"));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown action 'frobnicate'"));
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn paused_create_and_disabled_list_filter() {
         let dir = tmp_cron_dir();
-        let out = v(&execute_in(&dir, &json!({
-            "action": "create", "schedule": "every 1h", "prompt": "later",
-            "paused": true, "paused_reason": "awaiting review",
-        })));
+        let out = v(&execute_in(
+            &dir,
+            &json!({
+                "action": "create", "schedule": "every 1h", "prompt": "later",
+                "paused": true, "paused_reason": "awaiting review",
+            }),
+        ));
         assert_eq!(out["paused"], true);
-        let out = v(&execute_in(&dir, &json!({"action": "list", "include_disabled": false})));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "list", "include_disabled": false}),
+        ));
         assert_eq!(out["count"], 0);
         let out = v(&execute_in(&dir, &json!({"action": "list"})));
         assert_eq!(out["count"], 1);

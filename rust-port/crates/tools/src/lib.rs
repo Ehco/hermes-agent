@@ -6,9 +6,15 @@
 //! mirroring the Python `registry.dispatch` contract so the agent loop and
 //! the cli `ToolHost` can treat results opaquely.
 
+pub mod annotate_preview;
+pub mod clarify;
 pub mod cronjob;
 pub mod delegate_task;
+pub mod desktop_bridge;
+pub mod desktop_preview;
+pub mod drive_preview;
 pub mod edit;
+pub mod focus_pane;
 pub mod html_text;
 pub mod image_generate;
 pub mod list_dir;
@@ -17,9 +23,13 @@ pub mod memory;
 pub mod osv_check;
 pub mod process_manage;
 pub mod read_file;
+pub mod read_terminal;
+pub mod read_window_below;
 pub mod registry;
 pub mod search;
 pub mod session_search;
+pub mod set_theme;
+pub mod show_tip;
 pub mod skills;
 pub mod terminal;
 pub mod todo_list;

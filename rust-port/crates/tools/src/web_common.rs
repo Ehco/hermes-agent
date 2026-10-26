@@ -74,10 +74,9 @@ pub fn hermes_cache_web_dir() -> Option<std::path::PathBuf> {
 pub fn base64_images_to_links(text: &str) -> String {
     use regex::Regex;
     // Markdown images: ![alt](data:image/...;base64,payload)
-    let md = Regex::new(
-        r"(?s)!\[(?P<alt>[^\]]*)\]\(\s*data:image/[^;]+;base64,[A-Za-z0-9+/=\s]+\)",
-    )
-    .unwrap();
+    let md =
+        Regex::new(r"(?s)!\[(?P<alt>[^\]]*)\]\(\s*data:image/[^;]+;base64,[A-Za-z0-9+/=\s]+\)")
+            .unwrap();
     let out = md.replace_all(text, |caps: &regex::Captures| {
         let alt = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
         if alt.is_empty() {
@@ -170,7 +169,11 @@ pub fn sha256(bytes: &[u8]) -> [u8; 32] {
         h[6] = h[6].wrapping_add(g);
         h[7] = h[7].wrapping_add(hh);
     }
-    h.iter().flat_map(|w| w.to_be_bytes()).collect::<Vec<u8>>().try_into().unwrap()
+    h.iter()
+        .flat_map(|w| w.to_be_bytes())
+        .collect::<Vec<u8>>()
+        .try_into()
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -220,7 +223,10 @@ mod tests {
             base64_images_to_links(&format!("![a chart]({blob})")),
             "[IMAGE: a chart]"
         );
-        assert_eq!(base64_images_to_links(&format!("see ({blob})")), "see [IMAGE]");
+        assert_eq!(
+            base64_images_to_links(&format!("see ({blob})")),
+            "see [IMAGE]"
+        );
         assert_eq!(base64_images_to_links(blob), "[IMAGE]");
         // Real image links are untouched.
         let md = "![pic](https://e.com/i.png)";

@@ -95,7 +95,10 @@ fn read_meta(dir: &Path, session_id: &str) -> Option<Value> {
 }
 
 fn is_running(session_id: &str) -> bool {
-    running().lock().map(|r| r.contains_key(session_id)).unwrap_or(false)
+    running()
+        .lock()
+        .map(|r| r.contains_key(session_id))
+        .unwrap_or(false)
 }
 
 /// Execute `process_manage` — the registry entry point.
@@ -105,7 +108,12 @@ pub fn execute(args: &Value) -> String {
 
 /// `execute` against an explicit sessions dir (tests, embedding hosts).
 pub fn execute_in(dir: &Path, args: &Value) -> String {
-    let action = args.get("action").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
+    let action = args
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
     // Coerce to string — some models send session_id as an integer (Python does str() too).
     let session_id = args
         .get("session_id")
@@ -244,12 +252,7 @@ fn log(dir: &Path, session_id: &str, args: &Value) -> Result<String, String> {
         .clamp(1, 2000) as usize;
     let content = std::fs::read_to_string(log_file(dir, session_id)).unwrap_or_default();
     let lines: Vec<&str> = content.lines().collect();
-    let window: Vec<&str> = lines
-        .iter()
-        .skip(offset)
-        .take(limit)
-        .copied()
-        .collect();
+    let window: Vec<&str> = lines.iter().skip(offset).take(limit).copied().collect();
     let total = lines.len();
     json!({
         "session_id": session_id,
@@ -320,7 +323,9 @@ fn kill(dir: &Path, session_id: &str) -> Result<String, String> {
             let mut meta = meta;
             meta["status"] = "killed".into();
             write_meta(dir, &meta);
-            json!({ "session_id": session_id, "status": "killed" }).to_string().pipe_ok()
+            json!({ "session_id": session_id, "status": "killed" })
+                .to_string()
+                .pipe_ok()
         }
         None => {
             let status = meta["status"].as_str().unwrap_or("exited");
@@ -349,7 +354,9 @@ fn write_stdin(session_id: &str, args: &Value, submit: bool) -> Result<String, S
         )));
     };
     if stdin.write_all(data.as_bytes()).is_err() {
-        return Err(err_json(&format!("failed to write to {session_id}: broken pipe")));
+        return Err(err_json(&format!(
+            "failed to write to {session_id}: broken pipe"
+        )));
     }
     if submit {
         #[cfg(windows)]
@@ -374,7 +381,9 @@ fn close_stdin(session_id: &str) -> Result<String, String> {
     };
     let mut child = handle.lock().unwrap();
     child.stdin = None; // drop -> EOF
-    json!({ "session_id": session_id, "status": "stdin_closed" }).to_string().pipe_ok()
+    json!({ "session_id": session_id, "status": "stdin_closed" })
+        .to_string()
+        .pipe_ok()
 }
 
 /// Spawn a detached background process (the `terminal(background=true)` path).
@@ -500,7 +509,11 @@ fn pump_to_log<R: Read + Send>(mut stream: R, log_path: &Path) {
         match stream.read(&mut buf) {
             Ok(0) | Err(_) => break,
             Ok(n) => {
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(log_path)
+                {
                     let _ = f.write_all(&buf[..n]);
                 }
             }
@@ -549,7 +562,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "hermes-procmgr-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -563,29 +579,56 @@ mod tests {
     fn unknown_action_and_missing_session_id() {
         let dir = tmp_dir();
         let out = v(&execute_in(&dir, &json!({"action": "frobnicate"})));
-        assert!(out["error"].as_str().unwrap().contains("Unknown process action"));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown process action"));
         let out = v(&execute_in(&dir, &json!({"action": "poll"})));
-        assert!(out["error"].as_str().unwrap().contains("session_id is required for poll"));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("session_id is required for poll"));
         let out = v(&execute_in(&dir, &json!({"action": "handoff"})));
-        assert!(out["error"].as_str().unwrap().contains("session_id is required for handoff"));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("session_id is required for handoff"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn unknown_session_is_an_error_not_a_panic() {
         let dir = tmp_dir();
-        let out = v(&execute_in(&dir, &json!({"action": "poll", "session_id": "proc_nope"})));
-        assert!(out["error"].as_str().unwrap().contains("Unknown session_id"));
-        let out = v(&execute_in(&dir, &json!({"action": "kill", "session_id": "proc_nope"})));
-        assert!(out["error"].as_str().unwrap().contains("Unknown session_id"));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "poll", "session_id": "proc_nope"}),
+        ));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown session_id"));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "kill", "session_id": "proc_nope"}),
+        ));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown session_id"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn handoff_is_subagent_only() {
         let dir = tmp_dir();
-        let out = v(&execute_in(&dir, &json!({"action": "handoff", "session_id": "proc_x"})));
-        assert!(out["error"].as_str().unwrap().contains("only available to a running subagent"));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "handoff", "session_id": "proc_x"}),
+        ));
+        assert!(out["error"]
+            .as_str()
+            .unwrap()
+            .contains("only available to a running subagent"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -600,14 +643,23 @@ mod tests {
         assert_eq!(spawned["status"], "running");
         let sid = spawned["session_id"].as_str().unwrap().to_string();
 
-        let waited = v(&execute_in(&dir, &json!({"action": "wait", "session_id": sid, "timeout": 15})));
+        let waited = v(&execute_in(
+            &dir,
+            &json!({"action": "wait", "session_id": sid, "timeout": 15}),
+        ));
         assert_eq!(waited["status"], "exited", "{waited}");
         assert_eq!(waited["exit_code"], 0);
         assert_eq!(waited["timed_out"], false);
-        assert!(waited["output"].as_str().unwrap().contains("hello-bg"), "{waited}");
+        assert!(
+            waited["output"].as_str().unwrap().contains("hello-bg"),
+            "{waited}"
+        );
 
         // Completed results stay retrievable by session_id (the retention contract).
-        let log = v(&execute_in(&dir, &json!({"action": "log", "session_id": sid})));
+        let log = v(&execute_in(
+            &dir,
+            &json!({"action": "log", "session_id": sid}),
+        ));
         assert!(log["output"].as_str().unwrap().contains("hello-bg"));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -617,12 +669,22 @@ mod tests {
         let dir = tmp_dir();
         // Three echos = three log lines, in order.
         #[cfg(windows)]
-        let spawned = v(&spawn_background_in(&dir, "(echo a)&(echo b)&(echo c)", None));
+        let spawned = v(&spawn_background_in(
+            &dir,
+            "(echo a)&(echo b)&(echo c)",
+            None,
+        ));
         #[cfg(not(windows))]
         let spawned = v(&spawn_background_in(&dir, "echo a; echo b; echo c", None));
         let sid = spawned["session_id"].as_str().unwrap().to_string();
-        let _ = execute_in(&dir, &json!({"action": "wait", "session_id": sid, "timeout": 15}));
-        let page = v(&execute_in(&dir, &json!({"action": "log", "session_id": sid, "offset": 1, "limit": 1})));
+        let _ = execute_in(
+            &dir,
+            &json!({"action": "wait", "session_id": sid, "timeout": 15}),
+        );
+        let page = v(&execute_in(
+            &dir,
+            &json!({"action": "log", "session_id": sid, "offset": 1, "limit": 1}),
+        ));
         let out = page["output"].as_str().unwrap().trim();
         assert_eq!(out, "b", "{page}");
         assert!(page["total_lines"].as_u64().unwrap() >= 3);
@@ -636,7 +698,12 @@ mod tests {
         let sid = spawned["session_id"].as_str().unwrap().to_string();
         let listed = v(&execute_in(&dir, &json!({"action": "list"})));
         let procs = listed["processes"].as_array().unwrap();
-        assert!(procs.iter().any(|p| p["session_id"].as_str() == Some(sid.as_str())), "{listed}");
+        assert!(
+            procs
+                .iter()
+                .any(|p| p["session_id"].as_str() == Some(sid.as_str())),
+            "{listed}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -647,15 +714,30 @@ mod tests {
         // `more` consumes stdin — a prompt-answering stand-in.
         let spawned = v(&spawn_background_in(&dir, "cmd /C more", None));
         let sid = spawned["session_id"].as_str().unwrap().to_string();
-        let out = v(&execute_in(&dir, &json!({"action": "write", "session_id": sid, "data": "hi"})));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "write", "session_id": sid, "data": "hi"}),
+        ));
         assert_eq!(out["status"], "written", "{out}");
-        let out = v(&execute_in(&dir, &json!({"action": "submit", "session_id": sid, "data": "hi"})));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "submit", "session_id": sid, "data": "hi"}),
+        ));
         assert_eq!(out["status"], "submitted");
-        let killed = v(&execute_in(&dir, &json!({"action": "kill", "session_id": sid})));
+        let killed = v(&execute_in(
+            &dir,
+            &json!({"action": "kill", "session_id": sid}),
+        ));
         assert_eq!(killed["status"], "killed", "{killed}");
         // Killing twice is a faithful "already exited" error, not a panic.
-        let again = v(&execute_in(&dir, &json!({"action": "kill", "session_id": sid})));
-        assert!(again["error"].as_str().unwrap().contains("already exited"), "{again}");
+        let again = v(&execute_in(
+            &dir,
+            &json!({"action": "kill", "session_id": sid}),
+        ));
+        assert!(
+            again["error"].as_str().unwrap().contains("already exited"),
+            "{again}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -665,10 +747,19 @@ mod tests {
         let dir = tmp_dir();
         let spawned = v(&spawn_background_in(&dir, "cmd /C more", None));
         let sid = spawned["session_id"].as_str().unwrap().to_string();
-        let out = v(&execute_in(&dir, &json!({"action": "close", "session_id": sid})));
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "close", "session_id": sid}),
+        ));
         assert_eq!(out["status"], "stdin_closed");
-        let out = v(&execute_in(&dir, &json!({"action": "write", "session_id": sid, "data": "x"})));
-        assert!(out["error"].as_str().unwrap().contains("stdin is closed"), "{out}");
+        let out = v(&execute_in(
+            &dir,
+            &json!({"action": "write", "session_id": sid, "data": "x"}),
+        ));
+        assert!(
+            out["error"].as_str().unwrap().contains("stdin is closed"),
+            "{out}"
+        );
         let _ = execute_in(&dir, &json!({"action": "kill", "session_id": sid}));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -678,11 +769,23 @@ mod tests {
         let dir = tmp_dir();
         let spawned = v(&spawn_background_in(&dir, "echo poll-me", None));
         let sid = spawned["session_id"].as_str().unwrap().to_string();
-        let _ = execute_in(&dir, &json!({"action": "wait", "session_id": sid, "timeout": 15}));
-        let first = v(&execute_in(&dir, &json!({"action": "poll", "session_id": sid})));
-        assert!(first["output"].as_str().unwrap().contains("poll-me"), "{first}");
+        let _ = execute_in(
+            &dir,
+            &json!({"action": "wait", "session_id": sid, "timeout": 15}),
+        );
+        let first = v(&execute_in(
+            &dir,
+            &json!({"action": "poll", "session_id": sid}),
+        ));
+        assert!(
+            first["output"].as_str().unwrap().contains("poll-me"),
+            "{first}"
+        );
         // Second poll: consumed — new output is empty even though the log has content.
-        let second = v(&execute_in(&dir, &json!({"action": "poll", "session_id": sid})));
+        let second = v(&execute_in(
+            &dir,
+            &json!({"action": "poll", "session_id": sid}),
+        ));
         assert_eq!(second["output"], "", "{second}");
         let _ = std::fs::remove_dir_all(&dir);
     }

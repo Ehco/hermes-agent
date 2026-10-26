@@ -30,7 +30,8 @@ pub trait DelegationBackend: Send + Sync {
 }
 
 fn backend() -> &'static Mutex<Option<std::sync::Arc<dyn DelegationBackend>>> {
-    static BACKEND: OnceLock<Mutex<Option<std::sync::Arc<dyn DelegationBackend>>>> = OnceLock::new();
+    static BACKEND: OnceLock<Mutex<Option<std::sync::Arc<dyn DelegationBackend>>>> =
+        OnceLock::new();
     BACKEND.get_or_init(|| Mutex::new(None))
 }
 
@@ -39,7 +40,9 @@ pub fn set_backend(new_backend: std::sync::Arc<dyn DelegationBackend>) {
     *backend().lock().unwrap() = Some(new_backend);
 }
 
-fn with_backend(f: impl FnOnce(&dyn DelegationBackend) -> Result<Value, String>) -> Option<Result<Value, String>> {
+fn with_backend(
+    f: impl FnOnce(&dyn DelegationBackend) -> Result<Value, String>,
+) -> Option<Result<Value, String>> {
     let guard = backend().lock().unwrap();
     guard.as_ref().map(|b| f(b.as_ref()))
 }
@@ -61,7 +64,9 @@ fn normalize_tasks(args: &Value) -> Result<Vec<(String, Option<String>)>, String
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|g| !g.is_empty())
-                .ok_or_else(|| format!("tasks[{i}] is missing 'goal' — each task needs a self-contained goal."))?;
+                .ok_or_else(|| {
+                    format!("tasks[{i}] is missing 'goal' — each task needs a self-contained goal.")
+                })?;
             let context = entry
                 .get("context")
                 .and_then(Value::as_str)
@@ -77,30 +82,45 @@ fn normalize_tasks(args: &Value) -> Result<Vec<(String, Option<String>)>, String
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|g| !g.is_empty())
-        .ok_or_else(|| "spawn requires tasks (a one-entry array), or the legacy top-level 'goal'.".to_string())?;
-    let context = args.get("context").and_then(Value::as_str).map(|c| c.to_string());
+        .ok_or_else(|| {
+            "spawn requires tasks (a one-entry array), or the legacy top-level 'goal'.".to_string()
+        })?;
+    let context = args
+        .get("context")
+        .and_then(Value::as_str)
+        .map(|c| c.to_string());
     Ok(vec![(goal.to_string(), context)])
 }
 
 /// Execute `delegate_task` — the registry entry point.
 pub fn execute(args: &Value) -> String {
-    let action = args.get("action").and_then(Value::as_str).unwrap_or("spawn").trim().to_lowercase();
-    let subagent_id = args.get("subagent_id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let action = args
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("spawn")
+        .trim()
+        .to_lowercase();
+    let subagent_id = args
+        .get("subagent_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let message = args.get("message").and_then(Value::as_str).unwrap_or("");
 
     match action.as_str() {
         "spawn" => match normalize_tasks(args) {
-            Ok(tasks) => {
-                match with_backend(|b| b.spawn_batch(&tasks).map_err(|e: String| e)) {
-                    Some(Ok(results)) => json!({ "success": true, "dispatched": tasks.len(), "results": results })
-                        .to_string(),
-                    Some(Err(e)) => tool_error(e),
-                    None => tool_error(
-                        "no delegation backend is wired into this process: the agent runtime owns \
-                         child transport construction; wire delegate_task::set_backend at startup.",
-                    ),
+            Ok(tasks) => match with_backend(|b| b.spawn_batch(&tasks).map_err(|e: String| e)) {
+                Some(Ok(results)) => {
+                    json!({ "success": true, "dispatched": tasks.len(), "results": results })
+                        .to_string()
                 }
-            }
+                Some(Err(e)) => tool_error(e),
+                None => tool_error(
+                    "no delegation backend is wired into this process: the agent runtime owns \
+                         child transport construction; wire delegate_task::set_backend at startup.",
+                ),
+            },
             Err(e) => tool_error(e),
         },
         "list" => match with_backend(|b| b.list().map_err(|e: String| e)) {
@@ -123,7 +143,9 @@ pub fn execute(args: &Value) -> String {
         }
         "stop" => {
             if subagent_id.is_empty() {
-                return tool_error("subagent_id is required for action='stop' (partial result still returns).");
+                return tool_error(
+                    "subagent_id is required for action='stop' (partial result still returns).",
+                );
             }
             match with_backend(|b| b.stop(&subagent_id).map_err(|e: String| e)) {
                 Some(Ok(v)) => v.to_string(),
@@ -185,7 +207,9 @@ mod tests {
     }
 
     fn install() {
-        set_backend(std::sync::Arc::new(StubBackend { calls: AtomicUsize::new(0) }));
+        set_backend(std::sync::Arc::new(StubBackend {
+            calls: AtomicUsize::new(0),
+        }));
     }
 
     #[test]
@@ -194,36 +218,81 @@ mod tests {
         let out = v(&execute(&json!({ "tasks": [{ "goal": "port the tool" }] })));
         assert_eq!(out["success"], true);
         assert_eq!(out["dispatched"], 1);
-        assert_eq!(out["results"][0]["summary"], "did port the tool with context ");
+        assert_eq!(
+            out["results"][0]["summary"],
+            "did port the tool with context "
+        );
 
         // Legacy single-goal shape wraps into a one-entry batch with context.
-        let out = v(&execute(&json!({ "goal": "solo", "context": "the widget is red" })));
-        assert_eq!(out["results"][0]["summary"], "did solo with context the widget is red");
+        let out = v(&execute(
+            &json!({ "goal": "solo", "context": "the widget is red" }),
+        ));
+        assert_eq!(
+            out["results"][0]["summary"],
+            "did solo with context the widget is red"
+        );
 
         // Validation: tasks array without goal.
         let out = v(&execute(&json!({ "tasks": [{ "context": "no goal" }] })));
-        assert!(out["error"].as_str().unwrap().contains("missing 'goal'"), "{out}");
+        assert!(
+            out["error"].as_str().unwrap().contains("missing 'goal'"),
+            "{out}"
+        );
         let out = v(&execute(&json!({ "tasks": [] })));
         assert!(out["error"].as_str().unwrap().contains("at least one task"));
         let out = v(&execute(&json!({})));
-        assert!(out["error"].as_str().unwrap().contains("requires tasks"), "{out}");
+        assert!(
+            out["error"].as_str().unwrap().contains("requires tasks"),
+            "{out}"
+        );
     }
 
     #[test]
     fn steer_and_stop_require_their_arguments() {
         install();
-        let out = v(&execute(&json!({ "action": "steer", "message": "use fewer threads" })));
-        assert!(out["error"].as_str().unwrap().contains("subagent_id is required"), "{out}");
-        let out = v(&execute(&json!({ "action": "steer", "subagent_id": "sub_1" })));
-        assert!(out["error"].as_str().unwrap().contains("message is required"), "{out}");
-        let out = v(&execute(&json!({ "action": "steer", "subagent_id": "sub_1", "message": "slow down" })));
+        let out = v(&execute(
+            &json!({ "action": "steer", "message": "use fewer threads" }),
+        ));
+        assert!(
+            out["error"]
+                .as_str()
+                .unwrap()
+                .contains("subagent_id is required"),
+            "{out}"
+        );
+        let out = v(&execute(
+            &json!({ "action": "steer", "subagent_id": "sub_1" }),
+        ));
+        assert!(
+            out["error"]
+                .as_str()
+                .unwrap()
+                .contains("message is required"),
+            "{out}"
+        );
+        let out = v(&execute(
+            &json!({ "action": "steer", "subagent_id": "sub_1", "message": "slow down" }),
+        ));
         assert_eq!(out["queued"], true);
-        let out = v(&execute(&json!({ "action": "steer", "subagent_id": "nope", "message": "x" })));
-        assert!(out["error"].as_str().unwrap().contains("Unknown subagent"), "{out}");
-        let out = v(&execute(&json!({ "action": "stop", "subagent_id": "sub_1" })));
+        let out = v(&execute(
+            &json!({ "action": "steer", "subagent_id": "nope", "message": "x" }),
+        ));
+        assert!(
+            out["error"].as_str().unwrap().contains("Unknown subagent"),
+            "{out}"
+        );
+        let out = v(&execute(
+            &json!({ "action": "stop", "subagent_id": "sub_1" }),
+        ));
         assert_eq!(out["stopped"], true);
         let out = v(&execute(&json!({ "action": "stop" })));
-        assert!(out["error"].as_str().unwrap().contains("subagent_id is required"), "{out}");
+        assert!(
+            out["error"]
+                .as_str()
+                .unwrap()
+                .contains("subagent_id is required"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -232,7 +301,13 @@ mod tests {
         let out = v(&execute(&json!({ "action": "list" })));
         assert_eq!(out["subagents"][0]["subagent_id"], "sub_1");
         let out = v(&execute(&json!({ "action": "explode" })));
-        assert!(out["error"].as_str().unwrap().contains("Unknown delegate_task action"), "{out}");
+        assert!(
+            out["error"]
+                .as_str()
+                .unwrap()
+                .contains("Unknown delegate_task action"),
+            "{out}"
+        );
     }
 
     #[test]

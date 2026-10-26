@@ -42,17 +42,41 @@ const NO_RESULT_ERROR: &str = "Extract backend returned no result for this URL";
 /// English words (`code`, `key`, `session`) are excluded so ordinary browsing
 /// is not blocked.
 const SENSITIVE_QUERY_PARAM_NAMES: &[&str] = &[
-    "access_token", "api_key", "apikey", "auth_token", "authorization", "awsaccesskeyid",
-    "client_secret", "credential", "credentials", "jwt", "password", "passwd", "secret",
-    "session_id", "signature", "token", "x_amz_security_token", "x_amz_signature",
-    "x-amz-security-token", "x-amz-signature",
+    "access_token",
+    "api_key",
+    "apikey",
+    "auth_token",
+    "authorization",
+    "awsaccesskeyid",
+    "client_secret",
+    "credential",
+    "credentials",
+    "jwt",
+    "password",
+    "passwd",
+    "secret",
+    "session_id",
+    "signature",
+    "token",
+    "x_amz_security_token",
+    "x_amz_signature",
+    "x-amz-security-token",
+    "x-amz-signature",
 ];
 
 /// `agent/redact._PREFIX_PATTERNS` subset that can appear inside a URL: the
 /// well-known credential token shapes. (`_PREFIX_RE` is applied to the URL
 /// verbatim; a full port of every vendor prefix is unnecessary here.)
 const SECRET_URL_PREFIXES: &[&str] = &[
-    "sk-", "ghp_", "ghs_", "github_pat_", "glpat-", "xoxb-", "xoxp-", "AKIA", "Bearer ",
+    "sk-",
+    "ghp_",
+    "ghs_",
+    "github_pat_",
+    "glpat-",
+    "xoxb-",
+    "xoxp-",
+    "AKIA",
+    "Bearer ",
     "eyJhb", // bare JWT bodies
 ];
 
@@ -83,7 +107,16 @@ fn web_extract_url(value: &Value) -> Option<String> {
 /// `web_tools_extract._validate_extract_urls`: normalize items and refuse the
 /// whole call when any URL carries a secret (percent-encoded forms included).
 /// Returns `(urls, indices, invalid)`, or a whole-call refusal JSON.
-fn validate_extract_urls(urls: &[Value]) -> Result<(Vec<String>, Vec<usize>, std::collections::BTreeMap<usize, Value>), String> {
+fn validate_extract_urls(
+    urls: &[Value],
+) -> Result<
+    (
+        Vec<String>,
+        Vec<usize>,
+        std::collections::BTreeMap<usize, Value>,
+    ),
+    String,
+> {
     let mut normalized = Vec::new();
     let mut indices = Vec::new();
     let mut invalid = std::collections::BTreeMap::new();
@@ -127,7 +160,12 @@ pub fn percent_decode_url(url: &str) -> String {
         }
         // Re-push the raw byte run up to the next multi-byte char boundary.
         let ch_len = utf8_len(bytes[i]);
-        out.push_str(&String::from_utf8_lossy(&bytes[i..(i + ch_len).min(bytes.len() + 1).min(bytes.len()).max(i + ch_len)]));
+        out.push_str(&String::from_utf8_lossy(
+            &bytes[i..(i + ch_len)
+                .min(bytes.len() + 1)
+                .min(bytes.len())
+                .max(i + ch_len)],
+        ));
         i += ch_len;
     }
     out
@@ -146,7 +184,10 @@ fn utf8_len(first: u8) -> usize {
 /// the URL appears to carry a credential.
 fn sensitive_url(url: &str) -> bool {
     let lower = url.to_lowercase();
-    if SECRET_URL_PREFIXES.iter().any(|p| lower.contains(&p.to_lowercase())) {
+    if SECRET_URL_PREFIXES
+        .iter()
+        .any(|p| lower.contains(&p.to_lowercase()))
+    {
         return true;
     }
     // Query parameter names (split on & / ? so a name inside a word isn't hit).
@@ -165,7 +206,9 @@ fn sensitive_url(url: &str) -> bool {
 /// resolve to them. Cloud metadata (169.254.169.254) is link-local and so
 /// covered. Literal IPs are checked directly; hostnames are resolved first.
 fn is_safe_url(url: &str) -> bool {
-    let Some(host) = url_host(url) else { return false; };
+    let Some(host) = url_host(url) else {
+        return false;
+    };
     let host_lower = host.to_lowercase();
     if host_lower == "localhost" || host_lower.ends_with(".localhost") || host_lower == "metadata" {
         return false;
@@ -282,10 +325,11 @@ fn truncate_with_footer(content: &str, url: &str, char_limit: usize) -> (String,
     let tail_budget = char_limit - head_budget;
     let head_boundary = content.floor_char_boundary(head_budget.min(content.len()));
     let mut head = &content[..head_boundary];
-    let mut tail = &content[content.len() - content
-        .ceil_char_boundary(content.len() - tail_budget.min(content.len()))
-        .max(0)
-        .min(content.len())..];
+    let mut tail = &content[content.len()
+        - content
+            .ceil_char_boundary(content.len() - tail_budget.min(content.len()))
+            .max(0)
+            .min(content.len())..];
     // Snap both cuts to line boundaries (head back, tail forward).
     if let Some(nl) = head.rfind('\n') {
         if nl as f32 > head.len() as f32 * 0.5 {
@@ -332,7 +376,11 @@ fn truncate_with_footer(content: &str, url: &str, char_limit: usize) -> (String,
 
 /// Execute `web_extract` — the registry entry point (JSON string in, out).
 pub fn execute(args: &Value) -> String {
-    let urls = args.get("urls").and_then(Value::as_array).cloned().unwrap_or_default();
+    let urls = args
+        .get("urls")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let urls: Vec<Value> = urls.into_iter().take(MAX_URLS).collect();
     let char_limit = clamp_or_default(args.get("char_limit").and_then(Value::as_i64));
 
@@ -351,7 +399,10 @@ pub fn execute(args: &Value) -> String {
         } else {
             fixed.insert(
                 *index,
-                page_error(url, "Blocked: URL targets a private or internal network address"),
+                page_error(
+                    url,
+                    "Blocked: URL targets a private or internal network address",
+                ),
             );
         }
     }
@@ -379,12 +430,17 @@ pub fn execute(args: &Value) -> String {
         };
         // `_trim_results`: keep only url/title/content/error (+ truncate).
         let obj = entry.as_object().unwrap();
-        let url = obj.get("url").and_then(Value::as_str).unwrap_or("").to_string();
-        let title = obj.get("title").and_then(Value::as_str).unwrap_or("").to_string();
-        let mut error = obj
-            .get("error")
+        let url = obj
+            .get("url")
             .and_then(Value::as_str)
-            .map(str::to_string);
+            .unwrap_or("")
+            .to_string();
+        let title = obj
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let mut error = obj.get("error").and_then(Value::as_str).map(str::to_string);
         let raw_content = obj
             .get("raw_content")
             .or_else(|| obj.get("content"))
@@ -412,10 +468,13 @@ pub fn execute(args: &Value) -> String {
         trimmed.insert("url".into(), json!(url));
         trimmed.insert("title".into(), json!(title));
         trimmed.insert("content".into(), json!(content));
-        trimmed.insert("error".into(), match &error {
-            Some(e) => json!(e),
-            None => Value::Null,
-        });
+        trimmed.insert(
+            "error".into(),
+            match &error {
+                Some(e) => json!(e),
+                None => Value::Null,
+            },
+        );
         if !content.is_empty() && error.is_none() {
             any_content = true;
         }
@@ -513,7 +572,10 @@ mod tests {
         assert_eq!(indices, vec![0]);
         assert!(invalid.get(&1).is_some());
         let entry = invalid.get(&1).unwrap();
-        assert!(entry["error"].as_str().unwrap().contains("Invalid URL item at index 1"));
+        assert!(entry["error"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid URL item at index 1"));
     }
 
     #[test]
@@ -535,14 +597,20 @@ mod tests {
     #[test]
     fn url_host_parses() {
         assert_eq!(url_host("https://a.com/p?q").as_deref(), Some("a.com"));
-        assert_eq!(url_host("http://user:pw@h.example:8080").as_deref(), Some("h.example"));
+        assert_eq!(
+            url_host("http://user:pw@h.example:8080").as_deref(),
+            Some("h.example")
+        );
         assert_eq!(url_host("http://[::1]:9000").as_deref(), Some("::1"));
         assert_eq!(url_host("not a url"), None);
     }
 
     #[test]
     fn binary_kinds_detected() {
-        assert_eq!(binary_payload_kind("SQLite format 3\u{0}..."), Some("SQLite"));
+        assert_eq!(
+            binary_payload_kind("SQLite format 3\u{0}..."),
+            Some("SQLite")
+        );
         assert_eq!(binary_payload_kind("PK\u{3}\u{4}rest"), Some("ZIP"));
         assert_eq!(binary_payload_kind("\u{7f}ELFpayload"), Some("ELF"));
         assert_eq!(binary_payload_kind("<html><body>text"), None);

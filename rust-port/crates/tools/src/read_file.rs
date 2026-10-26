@@ -9,9 +9,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::util::{
-    add_line_numbers, normalize_read_pagination, tool_error,
-};
+use crate::util::{add_line_numbers, normalize_read_pagination, tool_error};
 
 /// Read a file with 1-indexed `offset`/`limit` pagination and an `N|` gutter.
 ///
@@ -45,7 +43,11 @@ fn read(path: &str, offset: usize, limit: usize) -> Result<Value, std::io::Error
     let file_size = meta.len();
     // `cat -n` semantics: a trailing newline terminates the last line.
     let text = raw.strip_suffix('\n').unwrap_or(&raw);
-    let total_lines = if text.is_empty() && raw.is_empty() { 0 } else { text.split('\n').count() };
+    let total_lines = if text.is_empty() && raw.is_empty() {
+        0
+    } else {
+        text.split('\n').count()
+    };
 
     let start = offset.saturating_sub(1);
     let lines: Vec<&str> = text.split('\n').skip(start).take(limit).collect();
@@ -116,10 +118,7 @@ mod tests {
     use serde_json::{json, Value};
 
     fn tmpdir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "hermes-tools-read-{}",
-            unique_suffix(name)
-        ));
+        let dir = std::env::temp_dir().join(format!("hermes-tools-read-{}", unique_suffix(name)));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

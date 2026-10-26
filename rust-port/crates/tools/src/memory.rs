@@ -21,9 +21,10 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use hermes_skills::memory::{parse_entries, ENTRY_DELIMITER, MemoryStore, Target};
+use hermes_skills::memory::{parse_entries, MemoryStore, Target, ENTRY_DELIMITER};
 
-const REPLACE_REMOVED: &str = "'replace' is not available; use 'patch'. old_text is the exact span to change and \
+const REPLACE_REMOVED: &str =
+    "'replace' is not available; use 'patch'. old_text is the exact span to change and \
 content is its new text; the rest of the entry is kept. To rewrite a whole entry, \
 set old_text to the whole entry. Nothing was written.";
 const PATCH_DROP_HINT: &str = "To drop text inside an entry, patch a longer span that contains it; 'remove' deletes the whole entry.";
@@ -85,14 +86,20 @@ fn run(store: &mut MemoryStore, dir: &Path, args: &Value) -> String {
         .get("content")
         .and_then(Value::as_str)
         .filter(|c| !c.is_empty())
-        .or_else(|| args.get("new_text").and_then(Value::as_str).filter(|c| !c.is_empty()));
+        .or_else(|| {
+            args.get("new_text")
+                .and_then(Value::as_str)
+                .filter(|c| !c.is_empty())
+        });
     let old_text = args.get("old_text").and_then(Value::as_str);
 
     if let Some(ops) = args.get("operations") {
         let ops = match ops {
             Value::Array(items) => items.clone(),
             _ => {
-                return util_err("operations must be a list of {action, content?, old_text?} objects.");
+                return util_err(
+                    "operations must be a list of {action, content?, old_text?} objects.",
+                );
             }
         };
         return apply_batch(store, dir, target, &ops);
@@ -110,7 +117,9 @@ fn run(store: &mut MemoryStore, dir: &Path, args: &Value) -> String {
         return util_err(REPLACE_REMOVED);
     }
     if action != "add" && action != "patch" && action != "remove" {
-        return util_err(&format!("Unknown action '{action}'. Use: add, patch, remove"));
+        return util_err(&format!(
+            "Unknown action '{action}'. Use: add, patch, remove"
+        ));
     }
     if let Err(err) = validate_single(store, target, action, content, old_text) {
         return err.to_string();
@@ -168,9 +177,17 @@ fn apply_single(
 ) -> Result<Value, Value> {
     let outcome = match action {
         "add" => store.add(target, content.unwrap_or_default()),
-        "patch" => store.patch(target, old_text.unwrap_or_default(), content.unwrap_or_default()),
+        "patch" => store.patch(
+            target,
+            old_text.unwrap_or_default(),
+            content.unwrap_or_default(),
+        ),
         "remove" => store.remove(target, old_text.unwrap_or_default()),
-        _ => return Err(invalid_payload(&format!("Unknown action '{action}'. Use: add, patch, remove"))),
+        _ => {
+            return Err(invalid_payload(&format!(
+                "Unknown action '{action}'. Use: add, patch, remove"
+            )))
+        }
     };
     match outcome {
         Ok(out) => {
@@ -229,12 +246,28 @@ fn apply_batch(store: &mut MemoryStore, dir: &Path, target: Target, ops: &[Value
     for (index, op) in ops.iter().enumerate() {
         let op = match op {
             Value::Object(_) => op,
-            _ => return abort_batch(&snapshot, store, target, "operations entries must be objects.", "invalid_args", None),
+            _ => {
+                return abort_batch(
+                    &snapshot,
+                    store,
+                    target,
+                    "operations entries must be objects.",
+                    "invalid_args",
+                    None,
+                )
+            }
         };
         // A nested target equal to the call's (or null) is redundant; only a
         // different one asks for two stores in one call, which a batch cannot.
         let nested = op.get("target").and_then(Value::as_str).unwrap_or("");
-        if !nested.is_empty() && nested != if target == Target::User { "user" } else { "memory" } {
+        if !nested.is_empty()
+            && nested
+                != if target == Target::User {
+                    "user"
+                } else {
+                    "memory"
+                }
+        {
             return abort_batch(
                 &snapshot,
                 store,
@@ -251,7 +284,14 @@ fn apply_batch(store: &mut MemoryStore, dir: &Path, target: Target, ops: &[Value
         }
         let action = op.get("action").and_then(Value::as_str).unwrap_or("");
         if action == "replace" {
-            return abort_batch(&snapshot, store, target, REPLACE_REMOVED, "invalid_args", None);
+            return abort_batch(
+                &snapshot,
+                store,
+                target,
+                REPLACE_REMOVED,
+                "invalid_args",
+                None,
+            );
         }
         if action != "add" && action != "patch" && action != "remove" {
             return abort_batch(
@@ -267,16 +307,32 @@ fn apply_batch(store: &mut MemoryStore, dir: &Path, target: Target, ops: &[Value
             .get("content")
             .and_then(Value::as_str)
             .filter(|c| !c.is_empty())
-            .or_else(|| op.get("new_text").and_then(Value::as_str).filter(|c| !c.is_empty()));
+            .or_else(|| {
+                op.get("new_text")
+                    .and_then(Value::as_str)
+                    .filter(|c| !c.is_empty())
+            });
         let old_text = op.get("old_text").and_then(Value::as_str);
         if let Err(err) = validate_single(store, target, action, content, old_text) {
-            let msg = err.get("error").and_then(Value::as_str).unwrap_or("invalid operation").to_string();
+            let msg = err
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("invalid operation")
+                .to_string();
             return abort_batch(&snapshot, store, target, &msg, "invalid_args", None);
         }
         if let Err(err) = apply_single(store, target, action, content, old_text) {
-            let msg = err.get("error").and_then(Value::as_str).unwrap_or("operation failed").to_string();
+            let msg = err
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("operation failed")
+                .to_string();
             let closest = err.get("closest_entries").cloned();
-            let class = if err.get("current_entries").is_some() { "over_budget" } else { "no_match" };
+            let class = if err.get("current_entries").is_some() {
+                "over_budget"
+            } else {
+                "no_match"
+            };
             return abort_batch(&snapshot, store, target, &msg, class, closest);
         }
     }
@@ -333,7 +389,11 @@ fn usage_of(store: &MemoryStore, target: Target) -> String {
         Target::Memory => store.memory_entries.clone(),
         Target::User => store.user_entries.clone(),
     };
-    let limit = if target == Target::User { store.user_char_limit } else { store.memory_char_limit };
+    let limit = if target == Target::User {
+        store.user_char_limit
+    } else {
+        store.memory_char_limit
+    };
     let count = ENTRY_DELIMITER.chars().count() * entries.len().saturating_sub(1)
         + entries.iter().map(|e| e.chars().count()).sum::<usize>();
     format!("{count}/{limit} chars")
@@ -362,7 +422,8 @@ mod tests {
 
     fn tmp_dir() -> PathBuf {
         let id = NEXT_TMP.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("hermes-tools-mem-{}-{}", std::process::id(), id));
+        let dir =
+            std::env::temp_dir().join(format!("hermes-tools-mem-{}-{}", std::process::id(), id));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -375,21 +436,36 @@ mod tests {
     #[test]
     fn add_patch_remove_roundtrip_via_store() {
         let dir = tmp_dir();
-        let out = execute_in(&dir, &json!({"target": "memory", "action": "add", "content": "likes tea"}));
+        let out = execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "add", "content": "likes tea"}),
+        );
         let parsed = parse(&out);
         assert_eq!(parsed["success"], true, "{out}");
         assert_eq!(parsed["entry_count"], 1);
 
         // duplicate add is a no-op success
-        let out = execute_in(&dir, &json!({"target": "memory", "action": "add", "content": "likes tea"}));
-        assert!(parse(&out)["message"].as_str().unwrap().contains("already exists"));
+        let out = execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "add", "content": "likes tea"}),
+        );
+        assert!(parse(&out)["message"]
+            .as_str()
+            .unwrap()
+            .contains("already exists"));
 
         // patch replaces only the span
-        let out = execute_in(&dir, &json!({"target": "memory", "action": "patch", "old_text": "tea", "new_text": "coffee"}));
+        let out = execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "patch", "old_text": "tea", "new_text": "coffee"}),
+        );
         assert_eq!(parse(&out)["patched_entry_after"], "likes coffee");
 
         // remove the whole entry
-        let out = execute_in(&dir, &json!({"target": "memory", "action": "remove", "old_text": "likes coffee"}));
+        let out = execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "remove", "old_text": "likes coffee"}),
+        );
         assert_eq!(parse(&out)["removed_entry"], "likes coffee");
         assert_eq!(parse(&out)["entry_count"], 0);
         let _ = fs::remove_dir_all(&dir);
@@ -398,53 +474,90 @@ mod tests {
     #[test]
     fn new_text_aliases_content_and_missing_target_is_error() {
         let dir = tmp_dir();
-        let out = execute_in(&dir, &json!({"target": "user", "action": "add", "new_text": "name is Ada"}));
+        let out = execute_in(
+            &dir,
+            &json!({"target": "user", "action": "add", "new_text": "name is Ada"}),
+        );
         assert_eq!(parse(&out)["success"], true);
         assert!(dir.join("USER.md").exists());
 
         let out = execute_in(&dir, &json!({"action": "add", "content": "x"}));
         let parsed = parse(&out);
         assert_eq!(parsed["success"], false);
-        assert!(parsed["error"].as_str().unwrap().contains("Missing required target"));
+        assert!(parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("Missing required target"));
 
-        let out = execute_in(&dir, &json!({"target": "wallet", "action": "add", "content": "x"}));
-        assert!(parse(&out)["error"].as_str().unwrap().contains("Invalid memory target 'wallet'"));
+        let out = execute_in(
+            &dir,
+            &json!({"target": "wallet", "action": "add", "content": "x"}),
+        );
+        assert!(parse(&out)["error"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid memory target 'wallet'"));
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn single_op_validation_errors() {
         let dir = tmp_dir();
-        execute_in(&dir, &json!({"target": "memory", "action": "add", "content": "entry one"})).to_string();
+        execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "add", "content": "entry one"}),
+        )
+        .to_string();
 
         // add without content
         let out = execute_in(&dir, &json!({"target": "memory", "action": "add"}));
-        assert_eq!(parse(&out)["error"], "Content is required for 'add' action.");
+        assert_eq!(
+            parse(&out)["error"],
+            "Content is required for 'add' action."
+        );
 
         // patch without old_text -> inventory + retry instruction
-        let out = execute_in(&dir, &json!({"target": "memory", "action": "patch", "content": "x"}));
+        let out = execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "patch", "content": "x"}),
+        );
         let parsed = parse(&out);
         assert!(parsed["error"].as_str().unwrap().contains("needs old_text"));
         assert_eq!(parsed["current_entries"], json!(["entry one"]));
 
         // replace is retired
-        let out = execute_in(&dir, &json!({"target": "memory", "action": "replace", "old_text": "a", "content": "b"}));
-        assert!(parse(&out)["error"].as_str().unwrap().contains("'replace' is not available"));
+        let out = execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "replace", "old_text": "a", "content": "b"}),
+        );
+        assert!(parse(&out)["error"]
+            .as_str()
+            .unwrap()
+            .contains("'replace' is not available"));
 
         // unknown action
         let out = execute_in(&dir, &json!({"target": "memory", "action": "frobnicate"}));
-        assert!(parse(&out)["error"].as_str().unwrap().contains("Unknown action 'frobnicate'"));
+        assert!(parse(&out)["error"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown action 'frobnicate'"));
 
         // neither action nor operations
         let out = execute_in(&dir, &json!({"target": "memory"}));
-        assert!(parse(&out)["error"].as_str().unwrap().contains("Missing required parameter"));
+        assert!(parse(&out)["error"]
+            .as_str()
+            .unwrap()
+            .contains("Missing required parameter"));
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn batch_applies_in_order_and_reports_usage() {
         let dir = tmp_dir();
-        execute_in(&dir, &json!({"target": "memory", "action": "add", "content": "stale entry"}));
+        execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "add", "content": "stale entry"}),
+        );
         let out = execute_in(
             &dir,
             &json!({"target": "memory", "operations": [
@@ -463,7 +576,10 @@ mod tests {
     #[test]
     fn batch_is_all_or_nothing() {
         let dir = tmp_dir();
-        execute_in(&dir, &json!({"target": "memory", "action": "add", "content": "keep me"}));
+        execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "add", "content": "keep me"}),
+        );
         let out = execute_in(
             &dir,
             &json!({"target": "memory", "operations": [
@@ -473,7 +589,10 @@ mod tests {
         );
         let parsed = parse(&out);
         assert_eq!(parsed["success"], false, "{out}");
-        assert!(parsed["error"].as_str().unwrap().contains("No operations were applied (batch is all-or-nothing)"));
+        assert!(parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("No operations were applied (batch is all-or-nothing)"));
         // The first op must NOT have stuck.
         assert!(dir.join("MEMORY.md").exists());
         let raw = fs::read_to_string(dir.join("MEMORY.md")).unwrap();
@@ -486,12 +605,24 @@ mod tests {
         let dir = tmp_dir();
         // Default limit is 2200 chars; one long entry plus one more overflows.
         let long = "x".repeat(2190);
-        let out = execute_in(&dir, &json!({"target": "memory", "action": "add", "content": long}));
+        let out = execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "add", "content": long}),
+        );
         assert_eq!(parse(&out)["success"], true);
-        let out = execute_in(&dir, &json!({"target": "memory", "action": "add", "content": "overflow entry"}));
+        let out = execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "add", "content": "overflow entry"}),
+        );
         let parsed = parse(&out);
         assert_eq!(parsed["success"], false);
-        assert!(parsed["error"].as_str().unwrap().contains("would exceed the limit"), "{out}");
+        assert!(
+            parsed["error"]
+                .as_str()
+                .unwrap()
+                .contains("would exceed the limit"),
+            "{out}"
+        );
         assert!(parsed["current_entries"].is_array());
         assert!(parsed["usage"].as_str().unwrap().contains("chars"));
         let _ = fs::remove_dir_all(&dir);
@@ -500,11 +631,20 @@ mod tests {
     #[test]
     fn no_match_failure_suggests_closest_entries() {
         let dir = tmp_dir();
-        execute_in(&dir, &json!({"target": "memory", "action": "add", "content": "deploy steps: build, test, ship"}));
-        let out = execute_in(&dir, &json!({"target": "memory", "action": "remove", "old_text": "deploy steps: build, test, send"}));
+        execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "add", "content": "deploy steps: build, test, ship"}),
+        );
+        let out = execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "remove", "old_text": "deploy steps: build, test, send"}),
+        );
         let parsed = parse(&out);
         assert_eq!(parsed["success"], false);
-        assert!(parsed["error"].as_str().unwrap().contains("No entry matched"));
+        assert!(parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("No entry matched"));
         assert!(parsed["closest_entries"].is_array(), "{out}");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -512,16 +652,31 @@ mod tests {
     #[test]
     fn user_and_memory_targets_are_independent() {
         let dir = tmp_dir();
-        execute_in(&dir, &json!({"target": "user", "action": "add", "content": "user fact"}));
-        execute_in(&dir, &json!({"target": "memory", "action": "add", "content": "agent fact"}));
-        assert_eq!(parse_store_entries(&fs::read_to_string(dir.join("USER.md")).unwrap()), vec!["user fact"]);
-        assert_eq!(parse_store_entries(&fs::read_to_string(dir.join("MEMORY.md")).unwrap()), vec!["agent fact"]);
+        execute_in(
+            &dir,
+            &json!({"target": "user", "action": "add", "content": "user fact"}),
+        );
+        execute_in(
+            &dir,
+            &json!({"target": "memory", "action": "add", "content": "agent fact"}),
+        );
+        assert_eq!(
+            parse_store_entries(&fs::read_to_string(dir.join("USER.md")).unwrap()),
+            vec!["user fact"]
+        );
+        assert_eq!(
+            parse_store_entries(&fs::read_to_string(dir.join("MEMORY.md")).unwrap()),
+            vec!["agent fact"]
+        );
         // A batch cannot mix stores.
         let out = execute_in(
             &dir,
             &json!({"target": "memory", "operations": [{"action": "add", "content": "x", "target": "user"}]}),
         );
-        assert!(parse(&out)["error"].as_str().unwrap().contains("different target"));
+        assert!(parse(&out)["error"]
+            .as_str()
+            .unwrap()
+            .contains("different target"));
         let _ = fs::remove_dir_all(&dir);
     }
 }

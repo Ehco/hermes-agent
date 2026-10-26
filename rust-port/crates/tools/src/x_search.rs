@@ -42,11 +42,15 @@ impl HttpPost for ReqwestPoster {
             .post(url)
             .bearer_auth(bearer)
             .json(&serde_json::from_str::<Value>(body).unwrap_or(Value::Null))
-            .timeout(std::time::Duration::from_secs(DEFAULT_X_SEARCH_TIMEOUT_SECONDS))
+            .timeout(std::time::Duration::from_secs(
+                DEFAULT_X_SEARCH_TIMEOUT_SECONDS,
+            ))
             .send()
             .map_err(|e| format!("x_search request failed: {e}"))?;
         let status = resp.status().as_u16();
-        let body = resp.text().map_err(|e| format!("x_search read failed: {e}"))?;
+        let body = resp
+            .text()
+            .map_err(|e| format!("x_search read failed: {e}"))?;
         Ok((status, body))
     }
 }
@@ -57,17 +61,26 @@ impl HttpPost for ReqwestPoster {
 /// Rust port — the tool resolves the env var and surfaces the Python error
 /// text when nothing is configured.
 fn resolve_bearer() -> Result<(String, String, String), String> {
-    let api_key = std::env::var("XAI_API_KEY").unwrap_or_default().trim().to_string();
+    let api_key = std::env::var("XAI_API_KEY")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     if api_key.is_empty() {
-        return Err("No xAI credentials available. Run `hermes auth add xai-oauth` \
+        return Err(
+            "No xAI credentials available. Run `hermes auth add xai-oauth` \
             to sign in with your SuperGrok subscription, or set XAI_API_KEY."
-            .to_string());
+                .to_string(),
+        );
     }
     let base_url = std::env::var("XAI_BASE_URL")
         .ok()
         .filter(|u| !u.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_XAI_BASE_URL.to_string());
-    Ok((api_key, base_url.trim_end_matches('/').to_string(), "xai".into()))
+    Ok((
+        api_key,
+        base_url.trim_end_matches('/').to_string(),
+        "xai".into(),
+    ))
 }
 
 /// `_normalize_handles`: strip leading `@`, drop blanks, cap at 10.
@@ -82,7 +95,9 @@ pub fn normalize_handles(handles: Option<&Value>, field_name: &str) -> Result<Ve
         .filter(|h| !h.is_empty())
         .collect();
     if cleaned.len() > MAX_HANDLES {
-        return Err(format!("{field_name} supports at most {MAX_HANDLES} handles"));
+        return Err(format!(
+            "{field_name} supports at most {MAX_HANDLES} handles"
+        ));
     }
     Ok(cleaned)
 }
@@ -98,8 +113,18 @@ pub fn parse_iso_date(value: &str, field_name: &str) -> Result<Option<(i32, u32,
     if parts.len() != 3 {
         return Err(format!("{field_name} must be YYYY-MM-DD (got {raw:?})"));
     }
-    let (y, m, d) = match (parts[0].parse::<i32>(), parts[1].parse::<u32>(), parts[2].parse::<u32>()) {
-        (Ok(y), Ok(m), Ok(d)) if (1..=12).contains(&m) && (1..=31).contains(&d) && parts.iter().all(|p| p.len() == 2 || p.len() == 4) => (y, m, d),
+    let (y, m, d) = match (
+        parts[0].parse::<i32>(),
+        parts[1].parse::<u32>(),
+        parts[2].parse::<u32>(),
+    ) {
+        (Ok(y), Ok(m), Ok(d))
+            if (1..=12).contains(&m)
+                && (1..=31).contains(&d)
+                && parts.iter().all(|p| p.len() == 2 || p.len() == 4) =>
+        {
+            (y, m, d)
+        }
         _ => return Err(format!("{field_name} must be YYYY-MM-DD (got {raw:?})")),
     };
     Ok(Some((y, m, d)))
@@ -114,7 +139,8 @@ pub fn validate_date_range(from_date: &str, to_date: &str) -> Result<(), String>
         if f > t {
             return Err(format!(
                 "from_date ({}) must be on or before to_date ({})",
-                from_date.trim(), to_date.trim()
+                from_date.trim(),
+                to_date.trim()
             ));
         }
     }
@@ -152,9 +178,7 @@ fn today_utc() -> (i32, u32, u32) {
 }
 
 /// `(tool_def, active_filters)` — raises on invalid filters.
-fn build_x_search_tool_def(
-    args: &Value,
-) -> Result<(Value, Vec<String>), String> {
+fn build_x_search_tool_def(args: &Value) -> Result<(Value, Vec<String>), String> {
     let allowed = normalize_handles(args.get("allowed_x_handles"), "allowed_x_handles")?;
     let excluded = normalize_handles(args.get("excluded_x_handles"), "excluded_x_handles")?;
     if !allowed.is_empty() && !excluded.is_empty() {
@@ -184,10 +208,18 @@ fn build_x_search_tool_def(
         tool_def[key] = json!(raw);
         active_filters.push(key.to_string());
     }
-    if args.get("enable_image_understanding").and_then(Value::as_bool).unwrap_or(false) {
+    if args
+        .get("enable_image_understanding")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         tool_def["enable_image_understanding"] = json!(true);
     }
-    if args.get("enable_video_understanding").and_then(Value::as_bool).unwrap_or(false) {
+    if args
+        .get("enable_video_understanding")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         tool_def["enable_video_understanding"] = json!(true);
     }
     Ok((tool_def, active_filters))
@@ -203,7 +235,10 @@ fn message_contents(payload: &Value) -> Vec<&Value> {
                 .iter()
                 .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
                 .flat_map(|item| {
-                    item.get("content").and_then(Value::as_array).map(|c| c.iter().collect::<Vec<_>>()).unwrap_or_default()
+                    item.get("content")
+                        .and_then(Value::as_array)
+                        .map(|c| c.iter().collect::<Vec<_>>())
+                        .unwrap_or_default()
                 })
                 .collect()
         })
@@ -220,7 +255,12 @@ pub fn extract_response_text(payload: &Value) -> String {
     }
     let parts: Vec<String> = message_contents(payload)
         .iter()
-        .filter(|c| matches!(c.get("type").and_then(Value::as_str), Some("output_text") | Some("text")))
+        .filter(|c| {
+            matches!(
+                c.get("type").and_then(Value::as_str),
+                Some("output_text") | Some("text")
+            )
+        })
         .filter_map(|c| c.get("text").and_then(Value::as_str))
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty())
@@ -295,7 +335,12 @@ fn http_error_message(status: u16, body: &str) -> String {
         }
         return text.chars().take(500).collect();
     };
-    let code = payload.get("code").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let code = payload
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let message = payload
         .get("error")
         .and_then(Value::as_str)
@@ -351,14 +396,20 @@ pub fn execute_with(poster: &dyn HttpPost, credential: Option<&str>, args: &Valu
         Ok(v) => v,
         Err(e) => return error_envelope(&format!("x_search returned invalid JSON: {e}")),
     };
-    let citations = parsed.get("citations").cloned().unwrap_or_else(|| json!([]));
+    let citations = parsed
+        .get("citations")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
     let inline_citations = json!(extract_inline_citations(&parsed));
     // xAI returns 200 with a synthesized answer even when no posts match the
     // narrowing filters; with both citation channels empty the answer came
     // from training data, not the X index.
     let degraded = !active_filters.is_empty()
         && citations.as_array().map(|a| a.is_empty()).unwrap_or(true)
-        && inline_citations.as_array().map(|a| a.is_empty()).unwrap_or(true);
+        && inline_citations
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(true);
     let answer = extract_response_text(&parsed);
     json!({
         "success": true,
@@ -427,7 +478,7 @@ mod tests {
         let handles = json!(["@a", " b ", ""]);
         let out = normalize_handles(Some(&handles), "allowed_x_handles").unwrap();
         assert_eq!(out, vec!["a".to_string(), "b".to_string()]);
-        let eleven = json!(["u1","u2","u3","u4","u5","u6","u7","u8","u9","u10","u11"]);
+        let eleven = json!(["u1", "u2", "u3", "u4", "u5", "u6", "u7", "u8", "u9", "u10", "u11"]);
         let err = normalize_handles(Some(&eleven), "allowed_x_handles").unwrap_err();
         assert_eq!(err, "allowed_x_handles supports at most 10 handles");
         assert!(normalize_handles(None, "x").unwrap().is_empty());
@@ -451,7 +502,8 @@ mod tests {
     fn allowed_and_excluded_are_mutually_exclusive() {
         let err = build_x_search_tool_def(&json!({
             "allowed_x_handles": ["a"], "excluded_x_handles": ["b"],
-        })).unwrap_err();
+        }))
+        .unwrap_err();
         assert!(err.contains("cannot be used together"), "{err}");
     }
 
@@ -461,7 +513,8 @@ mod tests {
             "allowed_x_handles": ["@a"],
             "from_date": "2026-01-01",
             "enable_video_understanding": true,
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(def["allowed_x_handles"], json!(["a"]));
         assert_eq!(def["from_date"], "2026-01-01");
         assert_eq!(def["enable_video_understanding"], true);
@@ -470,8 +523,15 @@ mod tests {
 
     #[test]
     fn success_envelope_carries_citations_and_degraded_false() {
-        let poster = StubPoster { payload: canned_response(), status: 200 };
-        let out = v(&execute_with(&poster, Some("test-key"), &json!({"query": "rustc", "allowed_x_handles": ["a"]})));
+        let poster = StubPoster {
+            payload: canned_response(),
+            status: 200,
+        };
+        let out = v(&execute_with(
+            &poster,
+            Some("test-key"),
+            &json!({"query": "rustc", "allowed_x_handles": ["a"]}),
+        ));
         assert_eq!(out["success"], true);
         assert_eq!(out["provider"], "xai");
         assert_eq!(out["answer"], "Lots of chatter about rustc.");
@@ -482,12 +542,26 @@ mod tests {
 
     #[test]
     fn filters_with_no_citations_degrade() {
-        let poster = StubPoster { payload: json!({"output_text": "from my knowledge"}), status: 200 };
-        let out = v(&execute_with(&poster, Some("test-key"), &json!({"query": "q", "from_date": "2020-01-01"})));
+        let poster = StubPoster {
+            payload: json!({"output_text": "from my knowledge"}),
+            status: 200,
+        };
+        let out = v(&execute_with(
+            &poster,
+            Some("test-key"),
+            &json!({"query": "q", "from_date": "2020-01-01"}),
+        ));
         assert_eq!(out["degraded"], true);
-        assert!(out["degraded_reason"].as_str().unwrap().contains("no citations returned despite filters"));
+        assert!(out["degraded_reason"]
+            .as_str()
+            .unwrap()
+            .contains("no citations returned despite filters"));
         // No filters → never degraded.
-        let out = v(&execute_with(&poster, Some("test-key"), &json!({"query": "q"})));
+        let out = v(&execute_with(
+            &poster,
+            Some("test-key"),
+            &json!({"query": "q"}),
+        ));
         assert_eq!(out["degraded"], false);
     }
 
@@ -496,10 +570,17 @@ mod tests {
         struct ErrPoster;
         impl HttpPost for ErrPoster {
             fn post(&self, _u: &str, _b: &str, _body: &str) -> Result<(u16, String), String> {
-                Ok((429, r#"{"code":"rate_limit","error":"too many requests"}"#.into()))
+                Ok((
+                    429,
+                    r#"{"code":"rate_limit","error":"too many requests"}"#.into(),
+                ))
             }
         }
-        let out = v(&execute_with(&ErrPoster, Some("test-key"), &json!({"query": "q"})));
+        let out = v(&execute_with(
+            &ErrPoster,
+            Some("test-key"),
+            &json!({"query": "q"}),
+        ));
         assert_eq!(out["success"], false);
         assert_eq!(out["error"], "rate_limit: too many requests");
     }
@@ -512,14 +593,21 @@ mod tests {
                 Err("connection refused".into())
             }
         }
-        let out = v(&execute_with(&DownPoster, Some("test-key"), &json!({"query": "q"})));
+        let out = v(&execute_with(
+            &DownPoster,
+            Some("test-key"),
+            &json!({"query": "q"}),
+        ));
         assert_eq!(out["success"], false);
         assert_eq!(out["error"], "connection refused");
     }
 
     #[test]
     fn missing_query_is_tool_error() {
-        let poster = StubPoster { payload: canned_response(), status: 200 };
+        let poster = StubPoster {
+            payload: canned_response(),
+            status: 200,
+        };
         let out = v(&execute_with(&poster, Some("test-key"), &json!({})));
         assert!(out.get("error").is_some(), "{out}");
     }
@@ -528,9 +616,19 @@ mod tests {
     fn missing_credentials_surface_the_setup_error() {
         // Best-effort: only assert the setup error when the env is unset
         // (CI never sets XAI_API_KEY).
-        if std::env::var("XAI_API_KEY").unwrap_or_default().trim().is_empty() {
+        if std::env::var("XAI_API_KEY")
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
             let out = v(&execute(&json!({"query": "q"})));
-            assert!(out["error"].as_str().unwrap().contains("No xAI credentials"), "{out}");
+            assert!(
+                out["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("No xAI credentials"),
+                "{out}"
+            );
         }
     }
 

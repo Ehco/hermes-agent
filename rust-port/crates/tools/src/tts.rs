@@ -46,7 +46,11 @@ impl SpeechPoster for ReqwestPoster {
         let bytes = resp.bytes().map_err(|e| format!("tts read failed: {e}"))?;
         if !status.is_success() {
             let text = String::from_utf8_lossy(&bytes);
-            return Err(format!("tts returned HTTP {}: {}", status.as_u16(), text.chars().take(300).collect::<String>()));
+            return Err(format!(
+                "tts returned HTTP {}: {}",
+                status.as_u16(),
+                text.chars().take(300).collect::<String>()
+            ));
         }
         Ok(bytes.to_vec())
     }
@@ -64,10 +68,14 @@ fn load_tts_config() -> (Option<String>, Option<String>, Option<String>) {
             let base = std::env::var("USERPROFILE")
                 .or_else(|_| std::env::var("HOME"))
                 .unwrap_or_default();
-            std::path::PathBuf::from(base).join(".hermes").join("config.yaml")
+            std::path::PathBuf::from(base)
+                .join(".hermes")
+                .join("config.yaml")
         }
     };
-    let Ok(content) = std::fs::read_to_string(path) else { return (None, None, None) };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return (None, None, None);
+    };
     let mut provider = None;
     let mut api_key = None;
     let mut base_url = None;
@@ -119,7 +127,11 @@ fn resolve_credentials() -> Result<(String, String), String> {
     // `nous` is serviced by the OpenAI path through the managed gateway —
     // which is entitlement-gated CLI state; the Rust port resolves it from
     // env like any other OpenAI-compatible route.
-    let key = api_key.or_else(|| std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.trim().is_empty()));
+    let key = api_key.or_else(|| {
+        std::env::var("OPENAI_API_KEY")
+            .ok()
+            .filter(|k| !k.trim().is_empty())
+    });
     match key {
         Some(key) if !key.trim().is_empty() => {
             let base = base_url
@@ -188,7 +200,10 @@ pub fn execute_with(poster: &dyn SpeechPoster, credential: Option<&str>, args: &
     };
 
     let speed = match args.get("speed") {
-        Some(Value::Number(n)) => n.as_f64().unwrap_or(1.0).clamp(SPEED_RANGE.0, SPEED_RANGE.1),
+        Some(Value::Number(n)) => n
+            .as_f64()
+            .unwrap_or(1.0)
+            .clamp(SPEED_RANGE.0, SPEED_RANGE.1),
         _ => 1.0,
     };
     let voice = args
@@ -197,8 +212,14 @@ pub fn execute_with(poster: &dyn SpeechPoster, credential: Option<&str>, args: &
         .filter(|v| !v.trim().is_empty())
         .map(|v| v.trim().to_string())
         .unwrap_or_else(|| DEFAULT_OPENAI_VOICE.to_string());
-    let model = std::env::var("TTS_MODEL").ok().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string());
-    let instructions = args.get("instructions").and_then(Value::as_str).filter(|i| !i.trim().is_empty());
+    let model = std::env::var("TTS_MODEL")
+        .ok()
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string());
+    let instructions = args
+        .get("instructions")
+        .and_then(Value::as_str)
+        .filter(|i| !i.trim().is_empty());
 
     let output_path = args
         .get("output_path")
@@ -246,17 +267,24 @@ mod tests {
 
     impl SpeechPoster for StubPoster {
         fn post_speech(&self, url: &str, bearer: &str, body: &str) -> Result<Vec<u8>, String> {
-            self.requests.lock().unwrap().push((url.to_string(), bearer.to_string(), body.to_string()));
+            self.requests.lock().unwrap().push((
+                url.to_string(),
+                bearer.to_string(),
+                body.to_string(),
+            ));
             match &self.bytes {
-            Ok(b) => Ok(b.clone()),
-            Err(e) => Err(e.clone()),
+                Ok(b) => Ok(b.clone()),
+                Err(e) => Err(e.clone()),
             }
         }
     }
 
     impl StubPoster {
         fn ok() -> Self {
-            Self { requests: Mutex::new(Vec::new()), bytes: Ok(b"ID3 audiodata".to_vec()) }
+            Self {
+                requests: Mutex::new(Vec::new()),
+                bytes: Ok(b"ID3 audiodata".to_vec()),
+            }
         }
     }
 
@@ -275,10 +303,14 @@ mod tests {
         let stub = StubPoster::ok();
         let dir = std::env::temp_dir().join(format!("tts-out-{}", std::process::id()));
         let out_path = dir.join("hello.mp3");
-        let out = v(&execute_with(&stub, Some("test-key"), &json!({
-            "text": "hello world",
-            "output_path": out_path.display().to_string(),
-        })));
+        let out = v(&execute_with(
+            &stub,
+            Some("test-key"),
+            &json!({
+                "text": "hello world",
+                "output_path": out_path.display().to_string(),
+            }),
+        ));
         assert_eq!(out["success"], true, "{out}");
         assert!(out_path.exists(), "{}", out_path.display());
         assert_eq!(std::fs::read(&out_path).unwrap(), b"ID3 audiodata");
@@ -297,10 +329,14 @@ mod tests {
     fn speed_is_clamped_and_instructions_forwarded() {
         let stub = StubPoster::ok();
         let out_path = std::env::temp_dir().join(format!("tts-{}-slow.wav", std::process::id()));
-        let out = v(&execute_with(&stub, Some("test-key"), &json!({
-            "text": "slow", "speed": 99.0, "voice": "breeze",
-            "instructions": "whisper, cheerful", "output_path": out_path.display().to_string(),
-        })));
+        let out = v(&execute_with(
+            &stub,
+            Some("test-key"),
+            &json!({
+                "text": "slow", "speed": 99.0, "voice": "breeze",
+                "instructions": "whisper, cheerful", "output_path": out_path.display().to_string(),
+            }),
+        ));
         assert_eq!(out["success"], true, "{out}");
         let (_url, _b, body) = &stub.requests.lock().unwrap()[0];
         let body: Value = serde_json::from_str(body).unwrap();
@@ -314,16 +350,27 @@ mod tests {
     #[test]
     fn empty_text_is_tool_error_without_a_request() {
         let stub = StubPoster::ok();
-        let out = v(&execute_with(&stub, Some("test-key"), &json!({"text": "   "})));
+        let out = v(&execute_with(
+            &stub,
+            Some("test-key"),
+            &json!({"text": "   "}),
+        ));
         assert!(out.get("error").is_some(), "{out}");
         assert!(stub.requests.lock().unwrap().is_empty());
     }
 
     #[test]
     fn provider_errors_are_success_false() {
-        let stub = StubPoster { requests: Mutex::new(Vec::new()), bytes: Err("tts returned HTTP 429: quota exceeded".into()) };
+        let stub = StubPoster {
+            requests: Mutex::new(Vec::new()),
+            bytes: Err("tts returned HTTP 429: quota exceeded".into()),
+        };
         let out_path = std::env::temp_dir().join(format!("tts-{}-err.mp3", std::process::id()));
-        let out = v(&execute_with(&stub, Some("test-key"), &json!({"text": "hi", "output_path": out_path.display().to_string()})));
+        let out = v(&execute_with(
+            &stub,
+            Some("test-key"),
+            &json!({"text": "hi", "output_path": out_path.display().to_string()}),
+        ));
         assert_eq!(out["success"], false);
         assert!(out["error"].as_str().unwrap().contains("429"), "{out}");
         assert!(!out_path.exists(), "no file is written on failure");

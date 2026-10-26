@@ -5,13 +5,17 @@
 //! failures surface as `{"error": ...}` instead of panicking. The `ToolHost`
 //! in the cli crate delegates here.
 
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 
 use hermes_core::model::ToolSpec;
 
-use crate::{cronjob, delegate_task, edit, image_generate, list_dir, maps, memory, process_manage, read_file, search,
-            session_search, skills, terminal, todo_list, tool_search, tts, util, web_extract, web_search, write_file, x_search};
+use crate::{
+    annotate_preview, clarify, cronjob, delegate_task, desktop_preview, drive_preview, edit,
+    focus_pane, image_generate, list_dir, maps, memory, process_manage, read_file, read_terminal,
+    read_window_below, search, session_search, set_theme, show_tip, skills, terminal, todo_list,
+    tool_search, tts, util, web_extract, web_search, write_file, x_search,
+};
 
 pub struct ToolRegistry {
     specs: Vec<ToolSpec>,
@@ -88,6 +92,21 @@ pub fn execute_sync(name: &str, args: &Value) -> String {
         "text_to_speech" => tts::execute(args),
         "delegate_task" => delegate_task::execute(args),
         "skill_manage" => skills::execute_manage(args),
+        // Structured questions to the user (Python tools/clarify_tool.py); the
+        // UI is a platform-injected callback, so bare CLI execution is
+        // unavailable-but-validating.
+        "clarify" => clarify::execute(args),
+        // Desktop-GUI tools (Python tools/desktop_ui toolset): validate args,
+        // then round-trip through the desktop bridge; without one they surface
+        // their faithful "only available in the Hermes desktop app" error.
+        "set_theme" => set_theme::execute(args),
+        "focus_pane" => focus_pane::execute(args),
+        "show_tip" => show_tip::execute(args),
+        "read_terminal" => read_terminal::execute(args),
+        "read_window_below" => read_window_below::execute(args),
+        "desktop_preview" => desktop_preview::execute(args),
+        "drive_preview" => drive_preview::execute(args),
+        "annotate_preview" => annotate_preview::execute(args),
         // Progressive tool disclosure bridges (Python tools/tool_search.py):
         // search the deferred-tool catalog, load schemas, invoke deferred tools.
         "tool_search" => tool_search::execute_search(args),
@@ -489,6 +508,136 @@ pub fn specs() -> Vec<ToolSpec> {
                 "required": ["calls"]
             }),
         },
+        // --- Batch 5: clarify + the desktop_ui toolset ---
+        ToolSpec {
+            name: "clarify".into(),
+            description: "Ask the user one or more questions when you need a decision, clarification, or feedback before proceeding. Pass every question in `questions` (1-5 entries) — a single question is a one-entry array, and several INDEPENDENT questions belong in ONE call. Per question: single-select (up to 4 choices — put your recommended option FIRST, the UI marks it '(Recommended)' and auto-appends an 'Other' free-text row), multi-select (multi_select=true), or open-ended (omit choices). Options go ONLY in `choices`, never enumerated inside the question text. Result: {responses: [...], outcome} in question order; each response has status answered, skipped or unanswered (user_response is null unless answered); outcome is submitted, cancelled, timed_out or undelivered, with a notice saying why when the wait ended without a submit.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 5,
+                        "description": "The question(s). Each: question text (options excluded), optional choices (recommended first; omit for free-text), optional multi_select. Responses come back in question order with the question text echoed.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": {"type": "string"},
+                                "choices": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
+                                "multi_select": {"type": "boolean"}
+                            },
+                            "required": ["question"]
+                        }
+                    }
+                },
+                "required": ["questions"]
+            }),
+        },
+        ToolSpec {
+            name: "set_theme".into(),
+            description: "Change how the Hermes desktop app looks: accent colour, light/dark mode, layout. Pass the values to apply them now; the result says what was applied. Pass picker instead to show the user an accent or layout picker card in the chat and wait for their pick. To reveal ONE pane, use focus_pane instead.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "accent": {"type": "string", "description": "A swatch id (mono, green, cyan, nous, violet, pink, red, orange), 'theme' for the theme's own accent, or a hex colour '#rrggbb'."},
+                    "mode": {"type": "string", "enum": ["light", "dark", "system"]},
+                    "layout": {"type": "string", "description": "Layout preset id. Simple mode: sidebar-left, sidebar-right. Advanced mode: default, basic, focus, terminal-deck, quad. Or the user's saved layouts by id."},
+                    "picker": {"type": "string", "enum": ["accent", "layout"], "description": "Show that picker card and wait for the user (up to 5 minutes). Pass it alone."}
+                }
+            }),
+        },
+        ToolSpec {
+            name: "focus_pane".into(),
+            description: "Reveal and focus a Hermes desktop pane when the user asks to see it: chat, files, terminal, review (git diff), or sessions. For URLs/files use the desktop_preview tool instead.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "pane": {"type": "string", "enum": ["chat", "files", "terminal", "review", "sessions"], "description": "Which pane to reveal."}
+                },
+                "required": ["pane"]
+            }),
+        },
+        ToolSpec {
+            name: "show_tip".into(),
+            description: "Point at one thing in the desktop UI with a small arrow bubble (no dimming, no tour chrome) — for when a sentence is clearer with a finger on its subject. Get selectors from tour(action='targets'), prefer stable:true, never guess. One tip at a time (new replaces last); say the same thing in chat too — the bubble is a pointer, not the message. Sparingly: a bubble every turn stops being read.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "The one-sentence bubble text."},
+                    "selector": {"type": "string", "description": "Selector from tour targets."},
+                    "title": {"type": "string", "description": "Optional heading."},
+                    "side": {"type": "string", "enum": ["top", "right", "bottom", "left"], "description": "Omit for 'top'; flips at screen edges."}
+                },
+                "required": ["text", "selector"]
+            }),
+        },
+        ToolSpec {
+            name: "read_terminal".into(),
+            description: "Read the in-app terminal pane beside this chat. No args = visible screen + total_lines; page scrollback with start_line (0 = oldest) + count. JSON: {total_lines, start, end, viewport_rows, cursor_row, text}.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "start_line": {"type": "integer", "description": "0-indexed first line (0 = oldest). Omit for the visible screen."},
+                    "count": {"type": "integer", "description": "Lines to read from start_line. Defaults to the visible row count."}
+                }
+            }),
+        },
+        ToolSpec {
+            name: "read_window_below".into(),
+            description: "Identify the app window directly behind the Hermes desktop window (what the user is working in). JSON: {window: {app, title, bounds, id}, frontmost, platform}. title may be empty when the OS withholds it (noted in `note`); where windows cannot be enumerated at all, {error, platform} says what would fix it — relay that instead of retrying. Metadata only; never captures pixels.".into(),
+            schema: json!({"type": "object", "properties": {}}),
+        },
+        ToolSpec {
+            name: "desktop_preview".into(),
+            description: "Open, close, or read the preview pane beside the chat. open: show a web URL (bare domains fine), a localhost dev server, or a file path (HTML renders live) — opens for the current window only. close: dismiss the whole pane, or one tab via url. read: what the pane currently shows — returns {kind, url, title, text, start, end, total_chars}; a Browser tab's text is the rendered page's visible text, paged with start/count (char offsets); a file tab answers identity only (read the file with read_file).".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["open", "close", "read"]},
+                    "url": {"type": "string", "description": "open: the target. close: one tab (omit for the whole pane)."},
+                    "label": {"type": "string", "description": "open: optional tab label."},
+                    "start": {"type": "integer", "description": "read: 0-indexed char offset."},
+                    "count": {"type": "integer", "description": "read: chars to return (capped per read)."}
+                },
+                "required": ["action"]
+            }),
+        },
+        ToolSpec {
+            name: "drive_preview".into(),
+            description: "Use the web page open in the desktop preview pane (the one `desktop_preview` opens): log in, fill forms, click through flows. ALWAYS start with action='elements' — it inventories clickable/typable things as refs ('btn-sign-in') with role/label/value; act by ref, not guessed selectors. Refs survive re-renders and only die on navigation. After the first full inventory, actions answer with a DELTA: 'added' in full, 'changed' as ref + moved fields, 'removed'/'rebound' as ref lists. Input is real. Actions: elements, click, hover, type (submit=true also presses Enter), scroll, press, strobe (visual flourish only — never loop it), back/forward/reload. Page text only: desktop_preview action=read.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["elements", "click", "hover", "type", "scroll", "press", "strobe", "back", "forward", "reload"], "description": "Start with 'elements'."},
+                    "ref": {"type": "string", "description": "Element ref from an earlier elements call."},
+                    "selector": {"type": "string", "description": "CSS selector fallback. Prefer ref."},
+                    "text": {"type": "string", "description": "type: the text."},
+                    "submit": {"type": "boolean", "description": "type: press Enter + submit the form after."},
+                    "key": {"type": "string", "description": "press: key name ('Enter', 'Escape', 'ArrowDown')."},
+                    "allow_shortcut": {"type": "boolean", "description": "press: allow a printable key on body/html. Off by default."},
+                    "amount": {"type": "integer", "description": "scroll: pixels (negative = up; default ~one screen)."},
+                    "to": {"type": "string", "enum": ["top", "bottom"], "description": "scroll: jump to top/bottom instead."},
+                    "max": {"type": "integer", "description": "elements: cap the inventory."},
+                    "full": {"type": "boolean", "description": "elements: full re-read instead of a delta. Rarely needed."}
+                },
+                "required": ["action"]
+            }),
+        },
+        ToolSpec {
+            name: "annotate_preview".into(),
+            description: "Highlight elements on the preview-pane page, lastingly (drive_preview's own marks fade; annotations stay until removed) — point at findings, flag what you're about to change, keep your place. Use the refs from drive_preview action='elements'. add: outline one element (optional short label, drawn on the page). hold: freeze the whole visible field, every element outlined and named. remove/clear: take one/all down. Marks follow their element on scroll; navigation clears them.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["add", "hold", "remove", "clear"], "description": "Defaults to 'add'."},
+                    "ref": {"type": "string", "description": "Ref from drive_preview elements."},
+                    "selector": {"type": "string", "description": "CSS selector fallback. Prefer ref."},
+                    "label": {"type": "string", "description": "Optional caption, e.g. 'cheapest'."}
+                },
+                "required": []
+            }),
+        },
     ]
 }
 
@@ -500,15 +649,22 @@ mod tests {
     #[tokio::test]
     async fn dispatches_by_name() {
         let reg = ToolRegistry::new();
-        assert_eq!(reg.specs().len(), 24);
+        assert_eq!(reg.specs().len(), 33);
 
-        let out = reg.dispatch("read_file", &json!({"path": "nonexistent-xyz"})).await;
+        let out = reg
+            .dispatch("read_file", &json!({"path": "nonexistent-xyz"}))
+            .await;
         assert!(out.contains("error"));
 
-        let out = reg.dispatch("write_file", &json!({
-            "path": std::env::temp_dir().join("hermes-reg-test.txt").to_string_lossy(),
-            "content": "hi"
-        })).await;
+        let out = reg
+            .dispatch(
+                "write_file",
+                &json!({
+                    "path": std::env::temp_dir().join("hermes-reg-test.txt").to_string_lossy(),
+                    "content": "hi"
+                }),
+            )
+            .await;
         assert!(out.contains("success"));
         let _ = std::fs::remove_file(std::env::temp_dir().join("hermes-reg-test.txt"));
     }
@@ -533,9 +689,13 @@ mod tests {
     async fn terminal_runs_in_registry() {
         let reg = ToolRegistry::new();
         #[cfg(windows)]
-        let out = reg.dispatch("terminal", &json!({"command": "echo regok"})).await;
+        let out = reg
+            .dispatch("terminal", &json!({"command": "echo regok"}))
+            .await;
         #[cfg(not(windows))]
-        let out = reg.dispatch("terminal", &json!({"command": "echo regok"})).await;
+        let out = reg
+            .dispatch("terminal", &json!({"command": "echo regok"}))
+            .await;
         assert!(out.contains("regok"), "{out}");
     }
 
@@ -543,16 +703,23 @@ mod tests {
     async fn new_tools_dispatch() {
         let reg = ToolRegistry::new();
 
-        let out = reg.dispatch("todo_list", &json!({
-            "todos": [{"id": "1", "content": "wire it", "status": "pending"}]
-        })).await;
+        let out = reg
+            .dispatch(
+                "todo_list",
+                &json!({
+                    "todos": [{"id": "1", "content": "wire it", "status": "pending"}]
+                }),
+            )
+            .await;
         assert!(out.contains("\"revision\""), "{out}");
         let out = reg.dispatch("todo_list", &json!({})).await;
         assert!(out.contains("\"todos\""), "{out}");
 
         // Stateless envelopes only: a memory call without target errors without
         // touching any store.
-        let out = reg.dispatch("memory", &json!({"action": "add", "content": "x"})).await;
+        let out = reg
+            .dispatch("memory", &json!({"action": "add", "content": "x"}))
+            .await;
         assert!(out.contains("Missing required target"), "{out}");
         let out = reg.dispatch("skills_list", &json!({})).await;
         assert!(out.contains("\"skills\""), "{out}");
@@ -564,5 +731,63 @@ mod tests {
         assert!(out.contains("'job_id' is required"), "{out}");
         let out = reg.dispatch("session_search", &json!({})).await;
         assert!(out.contains("\"mode\""), "{out}");
+
+        // Batch 5: clarify + the desktop_ui toolset dispatch and degrade
+        // faithfully without a desktop bridge / clarify UI.
+        let out = reg.dispatch("clarify", &json!({})).await;
+        assert!(out.contains("questions must be a non-empty array"), "{out}");
+        let out = reg
+            .dispatch("clarify", &json!({"questions": [{"question": "q"}]}))
+            .await;
+        assert!(
+            out.contains("not available in this execution context"),
+            "{out}"
+        );
+        for (name, args, expected) in [
+            (
+                "set_theme",
+                json!({"accent": "nous"}),
+                "only available in the Hermes desktop app",
+            ),
+            (
+                "focus_pane",
+                json!({"pane": "bogus"}),
+                "pane must be one of",
+            ),
+            ("show_tip", json!({"text": "hi"}), "tip needs a selector"),
+            (
+                "read_terminal",
+                json!({}),
+                "only available in the Hermes desktop app",
+            ),
+            (
+                "read_window_below",
+                json!({}),
+                "only available in the Hermes desktop app",
+            ),
+            (
+                "desktop_preview",
+                json!({"action": "open", "url": "example.com"}),
+                "only available in the Hermes desktop app",
+            ),
+            (
+                "desktop_preview",
+                json!({"action": "read"}),
+                "preview read must run inside a desktop session",
+            ),
+            (
+                "drive_preview",
+                json!({"action": "click"}),
+                "only available in the Hermes desktop app",
+            ),
+            (
+                "annotate_preview",
+                json!({"action": "teleport"}),
+                "only available in the Hermes desktop app",
+            ),
+        ] {
+            let out = reg.dispatch(name, &args).await;
+            assert!(out.contains(expected), "{name}: {out}");
+        }
     }
 }

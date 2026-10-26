@@ -76,9 +76,7 @@ pub fn catalog() -> Vec<(&'static str, ModelMeta)> {
             edit_endpoint: Some("fal-ai/flux-2/klein/9b/edit"),
             // Edit endpoints mostly auto-infer size, so `image_size` is not in
             // the edit whitelist (mirrors `edit_supports`).
-            edit_supports: vec![
-                "prompt", "image_url", "output_format", "num_images",
-            ],
+            edit_supports: vec!["prompt", "image_url", "output_format", "num_images"],
         },
     )]
 }
@@ -133,7 +131,14 @@ pub fn build_edit_payload(
     seed: Option<i64>,
     overrides: Option<&Map<String, Value>>,
 ) -> Value {
-    build_payload_inner(model, prompt, aspect_ratio, seed, overrides, Some(image_urls))
+    build_payload_inner(
+        model,
+        prompt,
+        aspect_ratio,
+        seed,
+        overrides,
+        Some(image_urls),
+    )
 }
 
 fn build_payload_inner(
@@ -150,7 +155,11 @@ fn build_payload_inner(
     } else {
         meta.supports.clone()
     };
-    let aspect = match aspect_ratio.map(str::to_lowercase).as_deref().map(str::trim) {
+    let aspect = match aspect_ratio
+        .map(str::to_lowercase)
+        .as_deref()
+        .map(str::trim)
+    {
         Some(a) if VALID_ASPECT_RATIOS.contains(&a) => a.to_string(),
         _ => DEFAULT_ASPECT_RATIO.to_string(),
     };
@@ -240,7 +249,11 @@ pub fn parse_queue_submit(response: &Value) -> Result<QueueTicket, String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| format!("https://queue.fal.run/requests/{request_id}"));
-    Ok(QueueTicket { request_id: request_id.to_string(), status_url, response_url })
+    Ok(QueueTicket {
+        request_id: request_id.to_string(),
+        status_url,
+        response_url,
+    })
 }
 
 /// `image_generation_tool._format_images`: normalize FAL result images
@@ -273,8 +286,7 @@ fn success_json(image: &Value, modality: &str) -> Value {
 
 /// The failure envelope of every error path.
 fn provider_error(error: &str, error_type: &str) -> String {
-    json!({ "success": false, "image": null, "error": error, "error_type": error_type })
-        .to_string()
+    json!({ "success": false, "image": null, "error": error, "error_type": error_type }).to_string()
 }
 
 /// `_prepare_fal_request`: validate inputs and return `(endpoint, arguments)`.
@@ -335,7 +347,12 @@ pub fn execute(args: &Value) -> String {
     let aspect_ratio = args.get("aspect_ratio").and_then(Value::as_str);
     let seed = args.get("seed").and_then(Value::as_i64);
     let mut overrides = Map::new();
-    for key in ["num_inference_steps", "guidance_scale", "num_images", "output_format"] {
+    for key in [
+        "num_inference_steps",
+        "guidance_scale",
+        "num_images",
+        "output_format",
+    ] {
         if let Some(v) = args.get(key).cloned() {
             if !v.is_null() {
                 overrides.insert(key.into(), v);
@@ -355,7 +372,11 @@ pub fn execute(args: &Value) -> String {
         prompt,
         aspect_ratio,
         seed,
-        if overrides.is_empty() { None } else { Some(&overrides) },
+        if overrides.is_empty() {
+            None
+        } else {
+            Some(&overrides)
+        },
         &source_images,
     ) {
         Ok(v) => v,
@@ -416,7 +437,10 @@ pub fn execute(args: &Value) -> String {
     let _status: Value = loop {
         if std::time::Instant::now() > deadline {
             return provider_error(
-                &format!("Error generating image: FAL job {} timed out", ticket.request_id),
+                &format!(
+                    "Error generating image: FAL job {} timed out",
+                    ticket.request_id
+                ),
                 "TimeoutError",
             );
         }
@@ -470,7 +494,11 @@ pub fn execute(args: &Value) -> String {
             )
         }
     };
-    let images = result.get("images").and_then(Value::as_array).cloned().unwrap_or_default();
+    let images = result
+        .get("images")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     if images.is_empty() {
         return provider_error(
             "Error generating image: No images were generated",
@@ -484,7 +512,11 @@ pub fn execute(args: &Value) -> String {
             "ValueError",
         );
     }
-    let modality = if source_images.is_empty() { "text" } else { "image" };
+    let modality = if source_images.is_empty() {
+        "text"
+    } else {
+        "image"
+    };
     success_json(&formatted[0], modality).to_string()
 }
 
@@ -494,7 +526,11 @@ mod tests {
     use serde_json::json;
 
     fn meta_default() -> ModelMeta {
-        catalog().into_iter().find(|(k, _)| *k == DEFAULT_MODEL).unwrap().1
+        catalog()
+            .into_iter()
+            .find(|(k, _)| *k == DEFAULT_MODEL)
+            .unwrap()
+            .1
     }
 
     #[test]
@@ -572,7 +608,10 @@ mod tests {
     fn queue_ticket_parses_with_fallback_urls() {
         let ticket = parse_queue_submit(&json!({"request_id": "r1"})).unwrap();
         assert_eq!(ticket.request_id, "r1");
-        assert_eq!(ticket.status_url, "https://queue.fal.run/requests/r1/status");
+        assert_eq!(
+            ticket.status_url,
+            "https://queue.fal.run/requests/r1/status"
+        );
         assert_eq!(ticket.response_url, "https://queue.fal.run/requests/r1");
         let ticket = parse_queue_submit(&json!({
             "request_id": "r2",
@@ -600,7 +639,8 @@ mod tests {
     #[test]
     fn prepare_validates_prompt_and_edit_capability() {
         let meta = meta_default();
-        let (endpoint, args) = prepare_fal_request(DEFAULT_MODEL, &meta, "a cat", None, None, None, &[]).unwrap();
+        let (endpoint, args) =
+            prepare_fal_request(DEFAULT_MODEL, &meta, "a cat", None, None, None, &[]).unwrap();
         assert_eq!(endpoint, DEFAULT_MODEL);
         assert_eq!(args["prompt"], "a cat");
         let (endpoint, args) = prepare_fal_request(

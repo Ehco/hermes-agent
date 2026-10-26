@@ -94,10 +94,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn tmpdir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "hermes-tools-ls-{}",
-            unique_suffix(name)
-        ));
+        let dir = std::env::temp_dir().join(format!("hermes-tools-ls-{}", unique_suffix(name)));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

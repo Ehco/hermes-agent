@@ -59,7 +59,16 @@ pub fn execute(args: &Value) -> String {
     }
 
     let root = expand_tilde(path);
-    match search(&root, &re, target, file_glob, output_mode, context, offset, limit) {
+    match search(
+        &root,
+        &re,
+        target,
+        file_glob,
+        output_mode,
+        context,
+        offset,
+        limit,
+    ) {
         Ok(v) => v.to_string(),
         Err(e) => tool_error(format!("Path not found: {path} ({e})")),
     }
@@ -181,13 +190,7 @@ fn search(
 
 /// Render a matched line, adding `context` lines around it when requested.
 /// Context lines are prefixed with a space; the match line with `>`.
-fn render_line(
-    line: &str,
-    context: usize,
-    lines: &[&str],
-    idx: usize,
-    re: &Regex,
-) -> String {
+fn render_line(line: &str, context: usize, lines: &[&str], idx: usize, re: &Regex) -> String {
     if context == 0 {
         // A single very long line is clamped like a read_file gutter.
         return clamp_line(line);
@@ -198,7 +201,11 @@ fn render_line(
         .iter()
         .enumerate()
         .map(|(i, l)| {
-            let prefix = if re.is_match(l) && start + i == idx { ">" } else { " " };
+            let prefix = if re.is_match(l) && start + i == idx {
+                ">"
+            } else {
+                " "
+            };
             format!("{prefix}{}", clamp_line(l))
         })
         .collect::<Vec<_>>()
@@ -259,10 +266,7 @@ mod tests {
     use serde_json::json;
 
     fn tmpdir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "hermes-tools-search-{}",
-            unique_suffix(name)
-        ));
+        let dir = std::env::temp_dir().join(format!("hermes-tools-search-{}", unique_suffix(name)));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -284,7 +288,9 @@ mod tests {
     #[test]
     fn content_mode_reports_line_numbers() {
         let dir = make_tree();
-        let v = parse(execute(&json!({"pattern": "TODO", "path": path_display(&dir)})));
+        let v = parse(execute(
+            &json!({"pattern": "TODO", "path": path_display(&dir)}),
+        ));
         assert_eq!(v["count"], 2);
         let ms = v["matches"].as_array().unwrap();
         assert_eq!(ms[0]["path"].as_str().unwrap().ends_with("alpha.rs"), true);
@@ -297,7 +303,9 @@ mod tests {
     #[test]
     fn regex_syntax_works() {
         let dir = make_tree();
-        let v = parse(execute(&json!({"pattern": "TO\\w+", "path": path_display(&dir)})));
+        let v = parse(execute(
+            &json!({"pattern": "TO\\w+", "path": path_display(&dir)}),
+        ));
         assert_eq!(v["count"], 2);
         let _ = fs::remove_dir_all(dir);
     }
@@ -309,7 +317,10 @@ mod tests {
             "pattern": "todo", "path": path_display(&dir), "file_glob": "*.txt"
         })));
         assert_eq!(v["count"], 1);
-        assert!(v["matches"][0]["path"].as_str().unwrap().ends_with("gamma.txt"));
+        assert!(v["matches"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("gamma.txt"));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -359,7 +370,9 @@ mod tests {
     #[test]
     fn invalid_regex_is_tool_error() {
         let dir = make_tree();
-        let v = parse(execute(&json!({"pattern": "(", "path": path_display(&dir)})));
+        let v = parse(execute(
+            &json!({"pattern": "(", "path": path_display(&dir)}),
+        ));
         assert!(v["error"].as_str().unwrap().contains("Invalid regex"));
         let _ = fs::remove_dir_all(dir);
     }
@@ -367,7 +380,9 @@ mod tests {
     #[test]
     fn missing_root_is_tool_error() {
         let dir = make_tree();
-        let v = parse(execute(&json!({"pattern": "x", "path": path_display(&dir.join("nope"))})));
+        let v = parse(execute(
+            &json!({"pattern": "x", "path": path_display(&dir.join("nope"))}),
+        ));
         assert!(v["error"].as_str().unwrap().contains("Path not found"));
         let _ = fs::remove_dir_all(dir);
     }

@@ -59,7 +59,9 @@ fn search(query: &str, limit: usize) -> Result<Vec<Value>, String> {
     let resp = resp.error_for_status().map_err(|e| {
         format!(
             "DuckDuckGo search returned HTTP {}",
-            e.status().map(|s| s.to_string()).unwrap_or_else(|| "?".into())
+            e.status()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "?".into())
         )
     })?;
     let mut html = resp
@@ -92,10 +94,12 @@ fn search(query: &str, limit: usize) -> Result<Vec<Value>, String> {
 /// snippets in document order.
 pub fn parse_ddg_results(html: &str, limit: usize) -> Vec<Value> {
     let safe_limit = limit.clamp(1, SEARCH_LIMIT_CAP);
-    let anchor_re = Regex::new("(?is)<a\\s[^>]*class=[\"']result__a[\"'][^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>")
-        .unwrap();
-    let snippet_re = Regex::new("(?is)<a\\s[^>]*class=[\"']result__snippet[\"'][^>]*>(.*?)</a>")
-        .unwrap();
+    let anchor_re = Regex::new(
+        "(?is)<a\\s[^>]*class=[\"']result__a[\"'][^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+    )
+    .unwrap();
+    let snippet_re =
+        Regex::new("(?is)<a\\s[^>]*class=[\"']result__snippet[\"'][^>]*>(.*?)</a>").unwrap();
 
     let anchors: Vec<(String, String)> = anchor_re
         .captures_iter(html)
@@ -119,10 +123,7 @@ pub fn parse_ddg_results(html: &str, limit: usize) -> Vec<Value> {
         .map(|(i, (href, title))| {
             let title = strip_tags(&title);
             let url = result_url(&href);
-            let description = snippets
-                .get(i)
-                .map(|s| strip_tags(s))
-                .unwrap_or_default();
+            let description = snippets.get(i).map(|s| strip_tags(s)).unwrap_or_default();
             // `title_hit(title, url, description, position)` — 1-based.
             json!({
                 "title": title,
@@ -229,7 +230,12 @@ mod tests {
         assert!(envelope["success"].as_bool().unwrap());
         let rows = envelope["data"]["web"].as_array().unwrap();
         for row in rows {
-            let keys: Vec<&str> = row.as_object().unwrap().keys().map(String::as_str).collect();
+            let keys: Vec<&str> = row
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
             assert_eq!(keys.len(), 4);
             for key in ["title", "url", "description", "position"] {
                 assert!(keys.contains(&key), "missing {key}");
@@ -247,7 +253,10 @@ mod tests {
         // The result depends on network availability; both envelopes are valid
         // JSON with the expected discriminator.
         let v: Value = serde_json::from_str(&out).unwrap();
-        assert!(v.get("success").is_some() || v.get("error").is_some(), "{out}");
+        assert!(
+            v.get("success").is_some() || v.get("error").is_some(),
+            "{out}"
+        );
     }
 
     #[test]
