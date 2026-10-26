@@ -34,7 +34,11 @@ impl ToolHost for EchoHost {
 fn text_tool() -> Arc<ScriptedTransport> {
     Arc::new(ScriptedTransport::new(vec![
         vec![
-            StreamItem::ToolCall { id: "call-1".into(), name: "terminal".into(), arguments: "{}".into() },
+            StreamItem::ToolCall {
+                id: "call-1".into(),
+                name: "terminal".into(),
+                arguments: "{}".into(),
+            },
             StreamItem::Done,
         ],
         vec![StreamItem::TextDelta("done".into()), StreamItem::Done],
@@ -56,17 +60,19 @@ where
 
 /// Connect a raw WS client (the desktop's `native_dial` shape: canonical
 /// subprotocol + ticket in the query string).
-async fn connect(url: &str) -> tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-> {
+async fn connect(
+    url: &str,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     let (ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
     ws
 }
 
 /// Next server frame (skipping pings), parsed as JSON.
-async fn next_frame(ws: &mut tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->) -> Value {
+async fn next_frame(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> Value {
     let msg = tokio::time::timeout(Duration::from_secs(10), ws.next())
         .await
         .expect("timed out waiting for a frame")
@@ -80,9 +86,11 @@ async fn next_frame(ws: &mut tokio_tungstenite::WebSocketStream<
 }
 
 /// Next `event` notification (`method: "event"`).
-async fn next_event(ws: &mut tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->) -> Value {
+async fn next_event(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> Value {
     loop {
         let frame = next_frame(ws).await;
         if frame.get("method").and_then(Value::as_str) == Some("event") {
@@ -92,9 +100,12 @@ async fn next_event(ws: &mut tokio_tungstenite::WebSocketStream<
 }
 
 /// Next JSON-RPC reply for `id` (events interleave on the wire).
-async fn next_result(ws: &mut tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->, id: u64) -> Value {
+async fn next_result(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    id: u64,
+) -> Value {
     loop {
         let frame = next_frame(ws).await;
         if frame.get("id") == Some(&json!(id)) && !frame.get("result").is_none() {
@@ -106,9 +117,14 @@ async fn next_result(ws: &mut tokio_tungstenite::WebSocketStream<
     }
 }
 
-async fn request(ws: &mut tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->, id: u64, method: &str, params: Value) -> Value {
+async fn request(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> Value {
     let req = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
     ws.send(Message::Text(req.to_string())).await.unwrap();
     next_result(ws, id).await
@@ -116,9 +132,11 @@ async fn request(ws: &mut tokio_tungstenite::WebSocketStream<
 
 fn api() -> DesktopApi<ScriptedTransport, RegistryHost> {
     DesktopApi::new(
-        Arc::new(ScriptedTransport::new(vec![
-            vec![StreamItem::TextDelta("Hello ".into()), StreamItem::TextDelta("world".into()), StreamItem::Done],
-        ])),
+        Arc::new(ScriptedTransport::new(vec![vec![
+            StreamItem::TextDelta("Hello ".into()),
+            StreamItem::TextDelta("world".into()),
+            StreamItem::Done,
+        ]])),
         Arc::new(RegistryHost::default()),
     )
 }
@@ -139,8 +157,15 @@ async fn ready_snapshot_ping_and_turn_stream() {
     // canonical-attach-snapshot.test.ts asserts these exact keys).
     let snap = request(&mut ws, 1, "session.create", json!({})).await;
     for key in [
-        "session_id", "stored_session_id", "messages", "revision",
-        "execution_generation", "running", "prompts", "replay_epoch", "last_sequence",
+        "session_id",
+        "stored_session_id",
+        "messages",
+        "revision",
+        "execution_generation",
+        "running",
+        "prompts",
+        "replay_epoch",
+        "last_sequence",
     ] {
         assert!(snap.get(key).is_some(), "snapshot missing {key}");
     }
@@ -166,7 +191,8 @@ async fn ready_snapshot_ping_and_turn_stream() {
     let mut completed = None;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while tokio::time::Instant::now() < deadline {
-        let event = tokio::time::timeout(deadline - tokio::time::Instant::now(), next_event(&mut ws)).await;
+        let event =
+            tokio::time::timeout(deadline - tokio::time::Instant::now(), next_event(&mut ws)).await;
         let event = match event {
             Ok(e) => e,
             Err(_) => break,
@@ -198,7 +224,13 @@ async fn reconnect_replay_carries_stamped_events() {
     let snap = request(&mut ws, 1, "session.create", json!({})).await;
     let sid = snap["session_id"].clone();
     let epoch = snap["replay_epoch"].clone();
-    let _ = request(&mut ws, 2, "prompt.submit", json!({ "session_id": sid, "text": "hi" })).await;
+    let _ = request(
+        &mut ws,
+        2,
+        "prompt.submit",
+        json!({ "session_id": sid, "text": "hi" }),
+    )
+    .await;
 
     // Drain live frames until the turn completes (message.complete).
     loop {
@@ -221,7 +253,10 @@ async fn reconnect_replay_carries_stamped_events() {
     assert_eq!(replay["replay_epoch"], epoch);
     assert_eq!(replay["truncated"], json!(false));
     let events = replay["events"].as_array().unwrap();
-    assert!(!events.is_empty(), "expected stamped events in the replay ring");
+    assert!(
+        !events.is_empty(),
+        "expected stamped events in the replay ring"
+    );
     let mut last = 0;
     for event in events {
         let seq = event["seq"].as_u64().unwrap();
@@ -278,9 +313,21 @@ async fn approval_prompt_lifecycle() {
     let mut ws = connect(&url).await;
     next_event(&mut ws).await;
 
-    let snap = request(&mut ws, 1, "session.create", json!({ "approval_mode": "ask" })).await;
+    let snap = request(
+        &mut ws,
+        1,
+        "session.create",
+        json!({ "approval_mode": "ask" }),
+    )
+    .await;
     let sid = snap["session_id"].clone();
-    let _ = request(&mut ws, 2, "prompt.submit", json!({ "session_id": sid, "text": "run it" })).await;
+    let _ = request(
+        &mut ws,
+        2,
+        "prompt.submit",
+        json!({ "session_id": sid, "text": "run it" }),
+    )
+    .await;
 
     // The approval request event carries the canonical pending-prompt shape.
     let mut prompt = None;
@@ -315,7 +362,10 @@ async fn approval_prompt_lifecycle() {
             break;
         }
     }
-    assert!(saw_tool_complete, "tool.complete never arrived after approval");
+    assert!(
+        saw_tool_complete,
+        "tool.complete never arrived after approval"
+    );
 }
 
 #[tokio::test]
@@ -326,7 +376,10 @@ async fn ticket_auth_single_use_and_reject() {
     next_event(&mut ws).await;
 
     // Mint over REST (the desktop's `POST /api/auth/ws-ticket` → getWsTicket).
-    let http = format!("http://{}", url.trim_start_matches("ws://").split('/').next().unwrap());
+    let http = format!(
+        "http://{}",
+        url.trim_start_matches("ws://").split('/').next().unwrap()
+    );
     let minted: Value = reqwest::Client::new()
         .post(format!("{http}/api/auth/ws-ticket"))
         .send()

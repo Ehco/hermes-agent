@@ -37,10 +37,7 @@ where
                 .patch(patch_session::<T, H>)
                 .delete(delete_session::<T, H>),
         )
-        .route(
-            "/api/sessions/{id}/messages",
-            get(session_messages::<T, H>),
-        )
+        .route("/api/sessions/{id}/messages", get(session_messages::<T, H>))
         .route(
             "/api/sessions/{id}/mutation-snapshot",
             get(mutation_snapshot::<T, H>),
@@ -49,7 +46,10 @@ where
     let skills = axum::Router::new()
         .route("/api/skills", get(list_skills::<T, H>))
         .route("/api/skills/content", get(skill_content::<T, H>))
-        .route("/api/skills/toggle", put(skill_toggle::<T, H>).post(skill_toggle::<T, H>))
+        .route(
+            "/api/skills/toggle",
+            put(skill_toggle::<T, H>).post(skill_toggle::<T, H>),
+        )
         .with_state(api.clone());
     let mcp = axum::Router::new()
         .route("/api/mcp/servers", get(list_mcp::<T, H>))
@@ -75,7 +75,10 @@ where
     H: ToolHost,
 {
     let registry = api.inner.registry.lock().unwrap();
-    let active = registry.values().filter(|s| s.running.load(Ordering::Relaxed)).count();
+    let active = registry
+        .values()
+        .filter(|s| s.running.load(Ordering::Relaxed))
+        .count();
     Json(json!({
         "ok": true,
         "status": "ok",
@@ -172,7 +175,10 @@ where
     T: Transport,
     H: ToolHost,
 {
-    let ticket = api.inner.tickets.mint(json!({ "user_id": "desktop", "provider": "local" }));
+    let ticket = api
+        .inner
+        .tickets
+        .mint(json!({ "user_id": "desktop", "provider": "local" }));
     Json(json!({ "ticket": ticket, "expires_in": super::tickets::TTL_SECONDS })).into_response()
 }
 
@@ -230,7 +236,11 @@ where
         .map(|s| s.rest_row())
         .collect();
     drop(registry);
-    let sort_key = if order == "created" { "started_at" } else { "last_active" };
+    let sort_key = if order == "created" {
+        "started_at"
+    } else {
+        "last_active"
+    };
     rows.sort_by(|a, b| {
         b[sort_key]
             .as_f64()
@@ -318,16 +328,17 @@ where
     let Some(session) = find(&api, &id) else {
         return not_found();
     };
-    let expected = body
-        .get("expected_revision")
-        .and_then(Value::as_u64);
+    let expected = body.get("expected_revision").and_then(Value::as_u64);
     if let Some(expected) = expected {
         let revision = session.revision.load(Ordering::Relaxed);
         if expected != revision {
             return revision_conflict(&session);
         }
     }
-    let title = body.get("title").and_then(Value::as_str).map(str::to_string);
+    let title = body
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     if let Some(title) = &title {
         *session.title.lock().unwrap() = title.clone();
     }
@@ -391,8 +402,10 @@ where
     let removed = registry.remove(&session.id);
     if removed.is_none() {
         // Also allow removal by stored id.
-        let stored =
-            registry.iter().find(|(_, s)| s.stored_id == id).map(|(k, _)| k.clone());
+        let stored = registry
+            .iter()
+            .find(|(_, s)| s.stored_id == id)
+            .map(|(k, _)| k.clone());
         if let Some(stored) = stored {
             registry.remove(&stored);
         } else {
@@ -450,7 +463,11 @@ where
         "latest" => total.saturating_sub(offset),
         _ => (offset + limit).min(total),
     };
-    let slice = if end <= start { &[][..] } else { &history[start..end] };
+    let slice = if end <= start {
+        &[][..]
+    } else {
+        &history[start..end]
+    };
     let messages: Vec<Value> = slice
         .iter()
         .map(|m| serde_json::to_value(m).unwrap_or(Value::Null))
@@ -493,7 +510,11 @@ fn bad_request(detail: &str) -> Response {
 }
 
 fn not_found() -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({ "detail": "Session not found" }))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "detail": "Session not found" })),
+    )
+        .into_response()
 }
 
 // ── skills ───────────────────────────────────────────────────────────────────
@@ -534,11 +555,19 @@ where
     H: ToolHost,
 {
     let Some(name) = q.get("name").cloned() else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "detail": "missing ?name=" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "detail": "missing ?name=" })),
+        )
+            .into_response();
     };
     let root_guard = api.inner.skills_root.lock().unwrap();
     let Some(root) = root_guard.as_ref() else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "detail": "no skills root" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "detail": "no skills root" })),
+        )
+            .into_response();
     };
     match hermes_skills::load_skill(root, &name) {
         Ok((content, _files)) => Json(json!({
@@ -557,16 +586,17 @@ where
 
 /// `PUT /api/skills/toggle` — the method `setSkillEnabled` sends (POST kept as
 /// a compatibility alias for the dashboard's older clients).
-async fn skill_toggle<T, H>(
-    State(api): State<Api<T, H>>,
-    Json(body): Json<Value>,
-) -> Response
+async fn skill_toggle<T, H>(State(api): State<Api<T, H>>, Json(body): Json<Value>) -> Response
 where
     T: Transport,
     H: ToolHost,
 {
     let Some(name) = body.get("name").and_then(Value::as_str).map(str::to_string) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "detail": "missing 'name'" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "detail": "missing 'name'" })),
+        )
+            .into_response();
     };
     let enabled = body.get("enabled").and_then(Value::as_bool).unwrap_or(true);
     let mut disabled = api.inner.skills_disabled.lock().unwrap();
@@ -601,11 +631,17 @@ where
 {
     let enabled = body.get("enabled").and_then(Value::as_bool).unwrap_or(true);
     let mut servers = api.inner.mcp_servers.lock().unwrap();
-    match servers.iter_mut().find(|s| s.get("name").and_then(Value::as_str) == Some(name.as_str())) {
+    match servers
+        .iter_mut()
+        .find(|s| s.get("name").and_then(Value::as_str) == Some(name.as_str()))
+    {
         Some(s) => s["enabled"] = json!(enabled),
         None => {
             drop(servers);
-            return (StatusCode::NOT_FOUND, Json(json!({ "detail": "unknown MCP server" })))
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "detail": "unknown MCP server" })),
+            )
                 .into_response();
         }
     }
@@ -614,10 +650,7 @@ where
 
 /// `POST /api/mcp/servers/{name}/test`: run the server's handshake +
 /// `tools/list` through `hermes_mcp::McpClient` and report the tools.
-async fn mcp_test<T, H>(
-    State(api): State<Api<T, H>>,
-    AxumPath(name): AxumPath<String>,
-) -> Response
+async fn mcp_test<T, H>(State(api): State<Api<T, H>>, AxumPath(name): AxumPath<String>) -> Response
 where
     T: Transport,
     H: ToolHost,
@@ -630,29 +663,52 @@ where
             .cloned()
     };
     let Some(config) = config else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "detail": "unknown MCP server" })))
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "detail": "unknown MCP server" })),
+        )
             .into_response();
     };
     let started = Instant::now();
     let result: Result<Vec<String>, String> = async move {
-        let command = config.get("command").and_then(Value::as_str).unwrap_or("").to_string();
+        let command = config
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let args: Vec<String> = config
             .get("args")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
             .unwrap_or_default();
-        let mut client = hermes_mcp::client::McpClient::stdio(&command, &args, &Default::default(), None)
-            .map_err(|e| format!("spawn failed: {e:#}"))?;
-        client.handshake().await.map_err(|e| format!("handshake failed: {e:#}"))?;
-        let tools = client.list_tools().await.map_err(|e| format!("tools/list failed: {e:#}"))?;
+        let mut client =
+            hermes_mcp::client::McpClient::stdio(&command, &args, &Default::default(), None)
+                .map_err(|e| format!("spawn failed: {e:#}"))?;
+        client
+            .handshake()
+            .await
+            .map_err(|e| format!("handshake failed: {e:#}"))?;
+        let tools = client
+            .list_tools()
+            .await
+            .map_err(|e| format!("tools/list failed: {e:#}"))?;
         Ok(tools.into_iter().map(|t| t.name).collect())
     }
     .await;
     let duration_ms = started.elapsed().as_millis() as u64;
     match result {
-        Ok(tools) => Json(json!({ "ok": true, "name": name, "tools": tools, "duration_ms": duration_ms }))
-            .into_response(),
-        Err(e) => Json(json!({ "ok": false, "name": name, "error": e, "duration_ms": duration_ms }))
-            .into_response(),
+        Ok(tools) => {
+            Json(json!({ "ok": true, "name": name, "tools": tools, "duration_ms": duration_ms }))
+                .into_response()
+        }
+        Err(e) => {
+            Json(json!({ "ok": false, "name": name, "error": e, "duration_ms": duration_ms }))
+                .into_response()
+        }
     }
 }

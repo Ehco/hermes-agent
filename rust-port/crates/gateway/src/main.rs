@@ -60,14 +60,20 @@ impl Args {
                 "--home" => a.home = Some(PathBuf::from(take(&mut it, &arg)?)),
                 "--port" => {
                     let value = take(&mut it, &arg)?;
-                    a.port = Some(value.parse().map_err(|_| anyhow!("--port must be a port number, got {value}"))?);
+                    a.port = Some(
+                        value
+                            .parse()
+                            .map_err(|_| anyhow!("--port must be a port number, got {value}"))?,
+                    );
                 }
                 "--serve" => a.serve = true,
                 "gateway" => {
                     // Subcommand form the Desktop sends: `gateway ensure`.
                     match it.next().as_deref() {
                         Some("ensure") => a.ensure = true,
-                        Some(other) => return Err(anyhow!("unknown gateway verb {other} (try ensure)")),
+                        Some(other) => {
+                            return Err(anyhow!("unknown gateway verb {other} (try ensure)"))
+                        }
                         None => return Err(anyhow!("gateway requires a verb (ensure)")),
                     }
                 }
@@ -164,7 +170,8 @@ fn read_owner_state(home: &Path) -> Option<OwnerState> {
 
 fn write_owner_state(home: &Path, state: &OwnerState) -> Result<()> {
     std::fs::create_dir_all(home)?;
-    let text = serde_json::to_string(&json!({ "port": state.port, "instance_id": state.instance_id }))?;
+    let text =
+        serde_json::to_string(&json!({ "port": state.port, "instance_id": state.instance_id }))?;
     // Temp + rename so a concurrent ensure never reads a half-written state.
     let tmp = state_path(home).with_extension("json.tmp");
     std::fs::write(&tmp, text)?;
@@ -173,7 +180,11 @@ fn write_owner_state(home: &Path, state: &OwnerState) -> Result<()> {
 }
 
 fn owner_listens(port: u16) -> bool {
-    std::net::TcpStream::connect_timeout(&(std::net::Ipv4Addr::LOCALHOST, port).into(), OWNER_PROBE_TIMEOUT).is_ok()
+    std::net::TcpStream::connect_timeout(
+        &(std::net::Ipv4Addr::LOCALHOST, port).into(),
+        OWNER_PROBE_TIMEOUT,
+    )
+    .is_ok()
 }
 
 // ─── Owner process: `--serve` ────────────────────────────────────────────────
@@ -190,7 +201,11 @@ impl Transport for AnyTransport {
         &self,
         messages: &[Message],
         tools: &[ToolSpec],
-    ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<hermes_core::transport::StreamItem>> + Send>>> {
+    ) -> Result<
+        std::pin::Pin<
+            Box<dyn futures::Stream<Item = Result<hermes_core::transport::StreamItem>> + Send>,
+        >,
+    > {
         match self {
             AnyTransport::ChatCompletions(t) => t.stream(messages, tools),
             AnyTransport::Anthropic(t) => t.stream(messages, tools),
@@ -204,16 +219,25 @@ fn serve_owner(args: &Args) -> Result<()> {
 
     let cfg = ProviderConfig::load_default()?;
     let transport = match cfg.kind {
-        ProviderKind::ChatCompletions => AnyTransport::ChatCompletions(hermes_core::transports::chat_completions::ChatCompletionsTransport::new(cfg)),
-        ProviderKind::Anthropic => AnyTransport::Anthropic(hermes_core::transports::anthropic::AnthropicTransport::new(cfg)),
+        ProviderKind::ChatCompletions => AnyTransport::ChatCompletions(
+            hermes_core::transports::chat_completions::ChatCompletionsTransport::new(cfg),
+        ),
+        ProviderKind::Anthropic => AnyTransport::Anthropic(
+            hermes_core::transports::anthropic::AnthropicTransport::new(cfg),
+        ),
     };
 
-    let api = DesktopApi::new(std::sync::Arc::new(transport), std::sync::Arc::new(RegistryHost::default()))
-        // Sessions persist as JSONL under the profile home and are restored on
-        // owner start, so the sidebar survives owner restarts.
-        .with_store_dir(home.join("sessions"));
+    let api = DesktopApi::new(
+        std::sync::Arc::new(transport),
+        std::sync::Arc::new(RegistryHost::default()),
+    )
+    // Sessions persist as JSONL under the profile home and are restored on
+    // owner start, so the sidebar survives owner restarts.
+    .with_store_dir(home.join("sessions"));
 
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
     runtime.block_on(async move {
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
             .await
@@ -244,7 +268,9 @@ fn spawn_detached_owner(exe: &Path, home: &Path, port: u16) -> Result<std::proce
         .arg("--home")
         .arg(home)
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::from(log.try_clone().context("cloning the owner log handle")?))
+        .stdout(std::process::Stdio::from(
+            log.try_clone().context("cloning the owner log handle")?,
+        ))
         .stderr(std::process::Stdio::from(log));
 
     #[cfg(windows)]
@@ -264,7 +290,8 @@ fn spawn_detached_owner(exe: &Path, home: &Path, port: u16) -> Result<std::proce
         cmd.process_group(0);
     }
 
-    cmd.spawn().map_err(|e| anyhow!("spawning the gateway owner: {e}"))
+    cmd.spawn()
+        .map_err(|e| anyhow!("spawning the gateway owner: {e}"))
 }
 
 /// One ready line on stdout + exit 0; on failure a `state != ready` verdict
@@ -289,7 +316,8 @@ fn fail_verdict(detail: &str) -> ! {
 /// to exit early (failure — the exit status goes into the verdict detail).
 fn ensure(args: &Args, exe: &Path) -> Result<()> {
     let home = profile_home(args);
-    std::fs::create_dir_all(&home).with_context(|| format!("creating profile home {}", home.display()))?;
+    std::fs::create_dir_all(&home)
+        .with_context(|| format!("creating profile home {}", home.display()))?;
 
     // 1. A recorded owner that still answers is attached as-is.
     if let Some(state) = read_owner_state(&home) {
@@ -308,7 +336,10 @@ fn ensure(args: &Args, exe: &Path) -> Result<()> {
 
     while std::time::Instant::now() < deadline {
         if owner_listens(port) {
-            let state = OwnerState { port, instance_id: hermes_gateway::desktop::new_id("gwinst") };
+            let state = OwnerState {
+                port,
+                instance_id: hermes_gateway::desktop::new_id("gwinst"),
+            };
             write_owner_state(&home, &state)?;
             print_verdict(ready_verdict(&home, &state));
 
@@ -377,7 +408,10 @@ fn run() -> Result<()> {
     let home = args.home.clone().unwrap_or_else(default_home);
 
     if let Some(state) = read_owner_state(&home).filter(|s| owner_listens(s.port)) {
-        println!("gateway ready on 127.0.0.1:{} (instance {})", state.port, state.instance_id);
+        println!(
+            "gateway ready on 127.0.0.1:{} (instance {})",
+            state.port, state.instance_id
+        );
     } else {
         println!("gateway not running");
     }
@@ -398,19 +432,31 @@ mod tests {
 
     #[test]
     fn bare_profile_names_join_the_profiles_dir() {
-        let args = Args { profile: Some("work".into()), ..Default::default() };
-        assert_eq!(profile_home(&args), default_home().join("profiles").join("work"));
+        let args = Args {
+            profile: Some("work".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            profile_home(&args),
+            default_home().join("profiles").join("work")
+        );
     }
 
     #[test]
     fn profile_paths_are_homes() {
-        let args = Args { profile: Some("C:\\homes\\work".into()), ..Default::default() };
+        let args = Args {
+            profile: Some("C:\\homes\\work".into()),
+            ..Default::default()
+        };
         assert_eq!(profile_home(&args), PathBuf::from("C:\\homes\\work"));
     }
 
     #[test]
     fn no_profile_is_the_root_home() {
-        let args = Args { home: Some(PathBuf::from("/h")), ..Default::default() };
+        let args = Args {
+            home: Some(PathBuf::from("/h")),
+            ..Default::default()
+        };
         assert_eq!(profile_home(&args), PathBuf::from("/h"));
     }
 }

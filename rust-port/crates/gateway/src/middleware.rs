@@ -44,7 +44,10 @@ pub async fn body_limit_middleware(
     }
 
     if let Some(cl) = req.headers().get(header::CONTENT_LENGTH) {
-        let parsed = cl.to_str().ok().and_then(|v| v.trim().parse::<usize>().ok());
+        let parsed = cl
+            .to_str()
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok());
         match parsed {
             Some(n) if n > cfg.max_body_bytes => {
                 return error_response(
@@ -79,7 +82,8 @@ pub async fn body_limit_middleware(
             );
         }
     };
-    next.run(Request::from_parts(parts, Body::from(bytes))).await
+    next.run(Request::from_parts(parts, Body::from(bytes)))
+        .await
 }
 
 /// Outermost: origin/behavior guard plus CORS answer. Empty `Origin`

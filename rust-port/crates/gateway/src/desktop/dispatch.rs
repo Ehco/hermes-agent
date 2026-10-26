@@ -87,29 +87,39 @@ where
         .unwrap_or("gui")
         .to_string();
     let session_id = session.id.clone();
-    api.inner.registry.lock().unwrap().insert(session_id.clone(), session);
+    api.inner
+        .registry
+        .lock()
+        .unwrap()
+        .insert(session_id.clone(), session);
     // Attach THIS socket so live frames flow to the creator.
     api.inner.hub.attach(handle, &session_id);
     emit_event(&api.inner, None, "sessions.changed", json!({}));
-    let attach_params = serde_json::Map::from_iter([( "session_id".to_string(), json!(session_id) )]);
+    let attach_params = serde_json::Map::from_iter([("session_id".to_string(), json!(session_id))]);
     resume(api, handle, id, &attach_params)
 }
 
-fn resume<T, H>(api: &DesktopApi<T, H>, handle: u64, id: Value, params: &serde_json::Map<String, Value>) -> Value
+fn resume<T, H>(
+    api: &DesktopApi<T, H>,
+    handle: u64,
+    id: Value,
+    params: &serde_json::Map<String, Value>,
+) -> Value
 where
     T: Transport,
     H: ToolHost,
 {
     let Some(session) = get_session(&api.inner, params.get("session_id")) else {
-        return super::jsonrpc::refused(
-            id,
-            "session_not_found",
-            "session not found",
-            None,
-        );
+        return super::jsonrpc::refused(id, "session_not_found", "session not found", None);
     };
-    let omit = params.get("omit_messages").and_then(Value::as_bool).unwrap_or(false)
-        || params.get("defer_history").and_then(Value::as_bool).unwrap_or(false);
+    let omit = params
+        .get("omit_messages")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || params
+            .get("defer_history")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
     api.inner.hub.attach(handle, &session.id);
     // Restore-on-resume: a stored transcript replays into the snapshot
     // (Python `SessionDB.get_messages` on resume).
@@ -148,7 +158,11 @@ where
     super::jsonrpc::response(id, session.row())
 }
 
-fn history<T, H>(api: &DesktopApi<T, H>, id: Value, params: &serde_json::Map<String, Value>) -> Value
+fn history<T, H>(
+    api: &DesktopApi<T, H>,
+    id: Value,
+    params: &serde_json::Map<String, Value>,
+) -> Value
 where
     T: Transport,
     H: ToolHost,
@@ -176,12 +190,7 @@ where
     H: ToolHost + Send + Sync + 'static,
 {
     let Some(session) = get_session(&api.inner, params.get("session_id")) else {
-        return super::jsonrpc::refused(
-            id,
-            "session_not_found",
-            "session not found",
-            None,
-        );
+        return super::jsonrpc::refused(id, "session_not_found", "session not found", None);
     };
     let text = params
         .get("text")
@@ -206,7 +215,11 @@ where
     super::jsonrpc::response(id, receipt)
 }
 
-fn interrupt<T, H>(api: &DesktopApi<T, H>, id: Value, params: &serde_json::Map<String, Value>) -> Value
+fn interrupt<T, H>(
+    api: &DesktopApi<T, H>,
+    id: Value,
+    params: &serde_json::Map<String, Value>,
+) -> Value
 where
     T: Transport,
     H: ToolHost,
@@ -221,7 +234,12 @@ where
     session.prompts.lock().unwrap().clear();
     session.queue.lock().unwrap().clear();
     session.running.store(false, Ordering::Relaxed);
-    emit_event(&api.inner, Some(&session), "session.updated", json!({ "running": false }));
+    emit_event(
+        &api.inner,
+        Some(&session),
+        "session.updated",
+        json!({ "running": false }),
+    );
     super::jsonrpc::response(id, json!({ "session_id": session.id, "running": false }))
 }
 
@@ -248,7 +266,10 @@ where
             );
         }
     }
-    let operation = params.get("operation").and_then(Value::as_str).unwrap_or("");
+    let operation = params
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let payload = params.get("payload").cloned().unwrap_or(json!({}));
     let mut receipt = json!({ "session_id": session.id, "operation": operation });
     match operation {
@@ -257,11 +278,17 @@ where
             *session.title.lock().unwrap() = title.to_string();
         }
         "archive" => {
-            let archived = payload.get("archived").and_then(Value::as_bool).unwrap_or(true);
+            let archived = payload
+                .get("archived")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
             session.archived.store(archived, Ordering::Relaxed);
         }
         "model" => {
-            let model = payload.get("model").and_then(Value::as_str).map(str::to_string);
+            let model = payload
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             *session.model.lock().unwrap() = model;
         }
         "reasoning" | "workspace" | "branch" | "compress" | "rewind" => {
@@ -279,13 +306,23 @@ where
     let new_revision = session.revision.fetch_add(1, Ordering::Relaxed) + 1;
     receipt["revision"] = json!(new_revision);
     receipt["ok"] = json!(true);
-    emit_event(&api.inner, Some(&session), "session.updated", json!({ "revision": new_revision }));
+    emit_event(
+        &api.inner,
+        Some(&session),
+        "session.updated",
+        json!({ "revision": new_revision }),
+    );
     super::jsonrpc::response(id, receipt)
 }
 
 /// `approval.respond` / `clarify.respond`: resolve the pending prompt's
 /// one-shot, emit `<kind>.settled`, answer `{status: "resolved", prompt_id}`.
-fn respond<T, H>(api: &DesktopApi<T, H>, id: Value, params: serde_json::Map<String, Value>, approval: bool) -> Value
+fn respond<T, H>(
+    api: &DesktopApi<T, H>,
+    id: Value,
+    params: serde_json::Map<String, Value>,
+    approval: bool,
+) -> Value
 where
     T: Transport,
     H: ToolHost,
@@ -360,7 +397,11 @@ pub fn settle_prompt(inner: &DesktopInner, session: &Arc<Session>, prompt_id: &s
 /// Reconnect replay (`session.events.since`): frames after `last_seen` out of
 /// the session's ring, plus the still-open prompts as `open_requests` so a
 /// reconnecting viewer restores its cards.
-fn events_since<T, H>(api: &DesktopApi<T, H>, id: Value, params: &serde_json::Map<String, Value>) -> Value
+fn events_since<T, H>(
+    api: &DesktopApi<T, H>,
+    id: Value,
+    params: &serde_json::Map<String, Value>,
+) -> Value
 where
     T: Transport,
     H: ToolHost,
@@ -379,7 +420,10 @@ where
 
     let ring = session.ring.lock().unwrap();
     let latest_seq = session.seq.load(Ordering::Relaxed);
-    let total_after = ring.iter().filter(|e| e["seq"].as_u64().is_some_and(|s| s > last_seen)).count();
+    let total_after = ring
+        .iter()
+        .filter(|e| e["seq"].as_u64().is_some_and(|s| s > last_seen))
+        .count();
     let events: Vec<Value> = ring
         .iter()
         .filter(|e| e["seq"].as_u64().is_some_and(|s| s > last_seen))
@@ -394,7 +438,10 @@ where
         .unwrap()
         .iter()
         .map(|p| {
-            let kind = match p.kind { PromptKind::Approval => "approval", PromptKind::Clarify => "clarify" };
+            let kind = match p.kind {
+                PromptKind::Approval => "approval",
+                PromptKind::Clarify => "clarify",
+            };
             json!({ "id": p.prompt_id, "method": kind, "params": {
                 "session_id": session.id, "prompt_id": p.prompt_id, "kind": kind,
                 "command": p.command, "description": p.description,

@@ -16,7 +16,9 @@ pub struct RegistryHost {
 
 impl Default for RegistryHost {
     fn default() -> Self {
-        Self { registry: Arc::new(ToolRegistry::new()) }
+        Self {
+            registry: Arc::new(ToolRegistry::new()),
+        }
     }
 }
 
@@ -27,7 +29,11 @@ impl RegistryHost {
 }
 
 impl ToolHost for RegistryHost {
-    fn execute(&self, name: &str, arguments: &str) -> impl Future<Output = anyhow::Result<String>> + Send {
+    fn execute(
+        &self,
+        name: &str,
+        arguments: &str,
+    ) -> impl Future<Output = anyhow::Result<String>> + Send {
         let registry = Arc::clone(&self.registry);
         let name = name.to_string();
         let arguments = arguments.to_string();

@@ -37,7 +37,14 @@ fn http() -> reqwest::Client {
 async fn status_reports_ok_and_version() {
     let api = api(None);
     let base = spawn_app(&api).await;
-    let status: Value = http().get(format!("{base}/api/status")).send().await.unwrap().json().await.unwrap();
+    let status: Value = http()
+        .get(format!("{base}/api/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(status["ok"], json!(true));
     assert!(status["version"].is_string());
     assert!(status["replay_epoch"].is_string());
@@ -81,20 +88,58 @@ async fn sessions_list_rows_and_delete() {
 
     // GET /api/sessions lists the row with the fields the sidebar renders
     // (the SessionInfo contract in apps/desktop/src/types/hermes.ts).
-    let listed: Value = client.get(format!("{base}/api/sessions")).send().await.unwrap().json().await.unwrap();
+    let listed: Value = client
+        .get(format!("{base}/api/sessions"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(listed["total"], json!(1));
     let row = &listed["sessions"][0];
     assert_eq!(row["id"], json!(sid));
     assert_eq!(row["title"], json!("Side chat"));
-    for key in ["started_at", "ended_at", "last_active", "message_count", "preview", "archived", "pinned", "unread", "is_active", "profile", "source", "cwd", "model", "input_tokens", "output_tokens", "tool_call_count"] {
+    for key in [
+        "started_at",
+        "ended_at",
+        "last_active",
+        "message_count",
+        "preview",
+        "archived",
+        "pinned",
+        "unread",
+        "is_active",
+        "profile",
+        "source",
+        "cwd",
+        "model",
+        "input_tokens",
+        "output_tokens",
+        "tool_call_count",
+    ] {
         assert!(row.get(key).is_some(), "session row missing {key}");
     }
 
     // GET /api/sessions/{id}, PATCH (rename), and DELETE (fenced receipt).
-    let one: Value = client.get(format!("{base}/api/sessions/{sid}")).send().await.unwrap().json().await.unwrap();
+    let one: Value = client
+        .get(format!("{base}/api/sessions/{sid}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(one["id"], json!(sid));
 
-    let snapshot: Value = client.get(format!("{base}/api/sessions/{sid}/mutation-snapshot")).send().await.unwrap().json().await.unwrap();
+    let snapshot: Value = client
+        .get(format!("{base}/api/sessions/{sid}/mutation-snapshot"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(snapshot["exists"], json!(true));
     let revision = snapshot["runtime_revision"].as_u64().unwrap();
 
@@ -121,11 +166,25 @@ async fn sessions_list_rows_and_delete() {
     assert!(renamed["runtime_revision"].as_u64().unwrap() > revision);
     assert!(renamed["runtime_generation"].is_u64());
 
-    let deleted: Value = client.delete(format!("{base}/api/sessions/{sid}")).send().await.unwrap().json().await.unwrap();
+    let deleted: Value = client
+        .delete(format!("{base}/api/sessions/{sid}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(deleted["ok"], json!(true));
     assert_eq!(deleted["exists"], json!(true));
     assert!(deleted["runtime_revision"].is_u64());
-    let listed: Value = client.get(format!("{base}/api/sessions")).send().await.unwrap().json().await.unwrap();
+    let listed: Value = client
+        .get(format!("{base}/api/sessions"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(listed["total"], json!(0));
 }
 
@@ -147,7 +206,14 @@ async fn skills_list_content_toggle() {
     let client = http();
 
     // GET /api/skills serves the bare SkillInfo[] the Capabilities pane renders.
-    let listed: Value = client.get(format!("{base}/api/skills")).send().await.unwrap().json().await.unwrap();
+    let listed: Value = client
+        .get(format!("{base}/api/skills"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let list = listed.as_array().expect("GET /api/skills must be an array");
     assert_eq!(list.len(), 1);
     assert_eq!(list[0]["name"], json!("greeter"));
@@ -176,7 +242,14 @@ async fn skills_list_content_toggle() {
         .await
         .unwrap();
     assert_eq!(toggled["enabled"], json!(false));
-    let listed: Value = client.get(format!("{base}/api/skills")).send().await.unwrap().json().await.unwrap();
+    let listed: Value = client
+        .get(format!("{base}/api/skills"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(listed[0]["enabled"], json!(false));
 }
 
@@ -188,7 +261,14 @@ async fn mcp_servers_list_and_enable() {
     let base = spawn_app(&api).await;
     let client = http();
 
-    let listed: Value = client.get(format!("{base}/api/mcp/servers")).send().await.unwrap().json().await.unwrap();
+    let listed: Value = client
+        .get(format!("{base}/api/mcp/servers"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(listed["servers"][0]["name"], json!("fs"));
 
     let resp: Value = client
@@ -201,7 +281,14 @@ async fn mcp_servers_list_and_enable() {
         .await
         .unwrap();
     assert_eq!(resp["enabled"], json!(false));
-    let listed: Value = client.get(format!("{base}/api/mcp/servers")).send().await.unwrap().json().await.unwrap();
+    let listed: Value = client
+        .get(format!("{base}/api/mcp/servers"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(listed["servers"][0]["enabled"], json!(false));
 
     let unknown: reqwest::Response = client
@@ -218,7 +305,14 @@ async fn ws_ticket_mint_is_single_use() {
     let api = api(None);
     let base = spawn_app(&api).await;
     let client = http();
-    let minted: Value = client.post(format!("{base}/api/auth/ws-ticket")).send().await.unwrap().json().await.unwrap();
+    let minted: Value = client
+        .post(format!("{base}/api/auth/ws-ticket"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert!(minted["ticket"].as_str().unwrap().len() > 8);
     assert_eq!(minted["expires_in"], json!(30));
 }

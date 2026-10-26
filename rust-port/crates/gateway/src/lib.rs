@@ -21,6 +21,11 @@
 //! - Unknown paths → 404 with the original's OpenAI-style error envelope
 //!   `{"error":{"message":...,"type":"invalid_request_error","param":...,"code":...}}`.
 //!
+//! The webapp module (`webapp::`) is the browser-hosted Desktop surface
+//! (port of `gateway/webapp_listener.py` + `hermes_cli/web_routers/webapp.py`):
+//! static bundle serving, one-use window/launch/socket tickets and the
+//! `hermes webapp` CLI entrypoint — see the module's docs.
+//!
 //! Ported guards (`api_server.py` middlewares):
 //! - body limit: `MAX_REQUEST_BYTES` = 10 MB; `POST`/`PUT`/`PATCH` with a
 //!   `Content-Length` above it → 413 `code:"body_too_large"`; an unparseable
@@ -39,9 +44,11 @@ pub mod host;
 pub mod middleware;
 pub mod server;
 pub mod turn;
+pub mod webapp;
 
 pub use config::{GatewayConfig, MAX_REQUEST_BYTES};
 pub use desktop::DesktopApi;
 pub use host::RegistryHost;
 pub use server::{Gateway, GatewayBuilder};
 pub use turn::{run_streaming_turn, TurnEvent};
+pub use webapp::{WebappApi, WebappCommand, WebappSettings};

@@ -321,8 +321,13 @@ impl Session {
                 .collect()
         };
         let count = history.len();
-        let prompts_json: Vec<Value> =
-            self.prompts.lock().unwrap().iter().map(prompt_row).collect();
+        let prompts_json: Vec<Value> = self
+            .prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(prompt_row)
+            .collect();
         let running = self.running.load(Ordering::Relaxed);
         let revision = self.revision.load(Ordering::Relaxed);
         let generation = self.generation.load(Ordering::Relaxed);
@@ -400,7 +405,10 @@ pub struct Subscriber {
 
 impl Clone for Subscriber {
     fn clone(&self) -> Self {
-        Self { tx: self.tx.clone(), sessions: Mutex::new(self.sessions.lock().unwrap().clone()) }
+        Self {
+            tx: self.tx.clone(),
+            sessions: Mutex::new(self.sessions.lock().unwrap().clone()),
+        }
     }
 }
 
@@ -420,7 +428,10 @@ impl Clone for EventHub {
 
 impl Default for EventHub {
     fn default() -> Self {
-        Self { subscribers: Mutex::new(Vec::new()), next_id: AtomicU64::new(0) }
+        Self {
+            subscribers: Mutex::new(Vec::new()),
+            next_id: AtomicU64::new(0),
+        }
     }
 }
 
@@ -430,20 +441,32 @@ impl EventHub {
     pub fn subscribe(&self) -> (u64, mpsc::UnboundedReceiver<Value>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.subscribers
-            .lock()
-            .unwrap()
-            .push((id, Subscriber { tx, sessions: Mutex::new(HashSet::new()) }));
+        self.subscribers.lock().unwrap().push((
+            id,
+            Subscriber {
+                tx,
+                sessions: Mutex::new(HashSet::new()),
+            },
+        ));
         (id, rx)
     }
 
     pub fn unsubscribe(&self, handle: u64) {
-        self.subscribers.lock().unwrap().retain(|(id, _)| *id != handle);
+        self.subscribers
+            .lock()
+            .unwrap()
+            .retain(|(id, _)| *id != handle);
     }
 
     /// Attach a session to a subscribed socket (live events start flowing).
     pub fn attach(&self, handle: u64, session_id: &str) {
-        if let Some((_, sub)) = self.subscribers.lock().unwrap().iter_mut().find(|(id, _)| *id == handle) {
+        if let Some((_, sub)) = self
+            .subscribers
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|(id, _)| *id == handle)
+        {
             sub.sessions.lock().unwrap().insert(session_id.to_string());
         }
     }
@@ -584,7 +607,10 @@ where
     pub fn with_token(self, token: impl Into<String>) -> Self {
         let mut inner = (*self.inner).clone();
         inner.token = Some(token.into());
-        Self { inner: Arc::new(inner), ..self }
+        Self {
+            inner: Arc::new(inner),
+            ..self
+        }
     }
 
     /// Configure the per-session JSONL transcript store dir. Existing
@@ -595,32 +621,39 @@ where
         let dir = dir.into();
         inner.restore_sessions(&dir);
         inner.store_dir = Some(dir);
-        Self { inner: Arc::new(inner), ..self }
+        Self {
+            inner: Arc::new(inner),
+            ..self
+        }
     }
 
     /// Configure the skills root for the /api/skills routes.
     pub fn with_skills_root(self, dir: impl Into<PathBuf>) -> Self {
         let inner = (*self.inner).clone();
         *inner.skills_root.lock().unwrap() = Some(dir.into());
-        Self { inner: Arc::new(inner), ..self }
+        Self {
+            inner: Arc::new(inner),
+            ..self
+        }
     }
 
     /// Seed MCP server configs for the /api/mcp routes.
     pub fn with_mcp_servers(self, servers: Vec<Value>) -> Self {
         let inner = (*self.inner).clone();
         *inner.mcp_servers.lock().unwrap() = servers;
-        Self { inner: Arc::new(inner), ..self }
+        Self {
+            inner: Arc::new(inner),
+            ..self
+        }
     }
 
     /// The fully-layered router: REST + the ticketed `/api/ws` upgrade, under
     /// the same CORS/security-header middleware as `/v1/chat`.
     pub fn router(&self) -> axum::Router {
-        let app = axum::Router::new()
-            .merge(rest::routes(self.clone()))
-            .route(
-                "/api/ws",
-                axum::routing::get(ws::upgrade::<T, H>).with_state(self.clone()),
-            );
+        let app = axum::Router::new().merge(rest::routes(self.clone())).route(
+            "/api/ws",
+            axum::routing::get(ws::upgrade::<T, H>).with_state(self.clone()),
+        );
         app.layer(axum::middleware::from_fn_with_state(
             self.config.clone(),
             crate::middleware::security_headers_middleware,

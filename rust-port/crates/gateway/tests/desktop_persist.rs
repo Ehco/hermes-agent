@@ -54,15 +54,18 @@ fn fresh_store_dir(tag: &str) -> std::path::PathBuf {
 
 /// Connect + create one session + submit a prompt, draining events until the
 /// turn completes; returns the session id and the snapshot reply.
-async fn run_one_turn(
-    base: &str,
-    text: &str,
-) -> (String, Value) {
-    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(base)).await.unwrap();
+async fn run_one_turn(base: &str, text: &str) -> (String, Value) {
+    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(base))
+        .await
+        .unwrap();
     use tokio_tungstenite::tungstenite::Message;
     // Drain gateway.ready.
     loop {
-        let msg = tokio::time::timeout(Duration::from_secs(10), ws.next()).await.unwrap().unwrap().unwrap();
+        let msg = tokio::time::timeout(Duration::from_secs(10), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         let frame: Value = serde_json::from_str(&match msg {
             Message::Text(t) => t,
             _ => continue,
@@ -79,7 +82,11 @@ async fn run_one_turn(
     .unwrap();
     let mut snap = None;
     for _ in 0..20 {
-        let msg = tokio::time::timeout(Duration::from_secs(10), ws.next()).await.unwrap().unwrap().unwrap();
+        let msg = tokio::time::timeout(Duration::from_secs(10), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         let frame: Value = serde_json::from_str(&match msg {
             Message::Text(t) => t,
             _ => continue,
@@ -96,14 +103,18 @@ async fn run_one_turn(
     ws.send(Message::Text(
         json!({ "jsonrpc": "2.0", "id": 2, "method": "prompt.submit",
                 "params": { "session_id": sid, "text": text } })
-            .to_string(),
+        .to_string(),
     ))
     .await
     .unwrap();
     // Drain until message.complete (the turn is then fully persisted).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while tokio::time::Instant::now() < deadline {
-        let msg = tokio::time::timeout(Duration::from_secs(10), ws.next()).await.unwrap().unwrap().unwrap();
+        let msg = tokio::time::timeout(Duration::from_secs(10), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         let frame: Value = serde_json::from_str(&match msg {
             Message::Text(t) => t,
             _ => continue,
@@ -123,8 +134,11 @@ async fn transcript_round_trip_through_store_reload() {
     let dir = fresh_store_dir("roundtrip");
 
     // Instance 1: create a session, run one turn, learn the ids.
-    let api1 = DesktopApi::new(reply_transport("Persisted reply"), Arc::new(RegistryHost::default()))
-        .with_store_dir(dir.clone());
+    let api1 = DesktopApi::new(
+        reply_transport("Persisted reply"),
+        Arc::new(RegistryHost::default()),
+    )
+    .with_store_dir(dir.clone());
     let base1 = spawn_app(&api1).await;
     let (sid, _snap) = run_one_turn(&base1, "Persisted question").await;
     let stored_id = api1
@@ -139,7 +153,11 @@ async fn transcript_round_trip_through_store_reload() {
     // The transcript file exists on disk with both sides of the exchange.
     let file = dir.join(format!("{stored_id}.jsonl"));
     let on_disk = std::fs::read_to_string(&file).unwrap();
-    assert_eq!(on_disk.lines().count(), 2, "user + assistant line: {on_disk}");
+    assert_eq!(
+        on_disk.lines().count(),
+        2,
+        "user + assistant line: {on_disk}"
+    );
 
     // Instance 2: a "restarted" server over the SAME store dir.
     let api2 = DesktopApi::new(reply_transport("Later"), Arc::new(RegistryHost::default()))
@@ -162,10 +180,16 @@ async fn transcript_round_trip_through_store_reload() {
     assert_eq!(row["preview"], json!("Persisted reply"));
 
     // Resume over WS: the snapshot replays the stored transcript exactly.
-    let (mut ws2, _) = tokio_tungstenite::connect_async(ws_url(&base2)).await.unwrap();
+    let (mut ws2, _) = tokio_tungstenite::connect_async(ws_url(&base2))
+        .await
+        .unwrap();
     use tokio_tungstenite::tungstenite::Message;
     loop {
-        let msg = tokio::time::timeout(Duration::from_secs(10), ws2.next()).await.unwrap().unwrap().unwrap();
+        let msg = tokio::time::timeout(Duration::from_secs(10), ws2.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         let frame: Value = serde_json::from_str(&match msg {
             Message::Text(t) => t,
             _ => continue,
@@ -178,13 +202,17 @@ async fn transcript_round_trip_through_store_reload() {
     ws2.send(Message::Text(
         json!({ "jsonrpc": "2.0", "id": 1, "method": "session.resume",
                 "params": { "session_id": sid } })
-            .to_string(),
+        .to_string(),
     ))
     .await
     .unwrap();
     let mut resumed = None;
     for _ in 0..20 {
-        let msg = tokio::time::timeout(Duration::from_secs(10), ws2.next()).await.unwrap().unwrap().unwrap();
+        let msg = tokio::time::timeout(Duration::from_secs(10), ws2.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         let frame: Value = serde_json::from_str(&match msg {
             Message::Text(t) => t,
             _ => continue,
@@ -197,9 +225,16 @@ async fn transcript_round_trip_through_store_reload() {
     }
     let resumed = resumed.expect("no session.resume reply");
     let messages = resumed["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), 2, "resume must replay the stored transcript");
+    assert_eq!(
+        messages.len(),
+        2,
+        "resume must replay the stored transcript"
+    );
     assert_eq!(messages[0]["role"], json!("user"));
-    assert_eq!(messages[0]["content"][0]["text"], json!("Persisted question"));
+    assert_eq!(
+        messages[0]["content"][0]["text"],
+        json!("Persisted question")
+    );
     assert_eq!(messages[1]["role"], json!("assistant"));
     assert_eq!(messages[1]["content"][0]["text"], json!("Persisted reply"));
     assert_eq!(resumed["message_count"], json!(2));
@@ -221,8 +256,11 @@ async fn transcript_round_trip_through_store_reload() {
 async fn reconnect_replay_after_reload_reports_snapshot_required() {
     let dir = fresh_store_dir("replay");
 
-    let api1 = DesktopApi::new(reply_transport("Hi again"), Arc::new(RegistryHost::default()))
-        .with_store_dir(dir.clone());
+    let api1 = DesktopApi::new(
+        reply_transport("Hi again"),
+        Arc::new(RegistryHost::default()),
+    )
+    .with_store_dir(dir.clone());
     let base1 = spawn_app(&api1).await;
     let (sid, snap1) = run_one_turn(&base1, "hello").await;
     let old_epoch = snap1["replay_epoch"].as_str().unwrap().to_string();
@@ -232,10 +270,16 @@ async fn reconnect_replay_after_reload_reports_snapshot_required() {
     let api2 = DesktopApi::new(reply_transport("Later"), Arc::new(RegistryHost::default()))
         .with_store_dir(dir.clone());
     let base2 = spawn_app(&api2).await;
-    let (mut ws2, _) = tokio_tungstenite::connect_async(ws_url(&base2)).await.unwrap();
+    let (mut ws2, _) = tokio_tungstenite::connect_async(ws_url(&base2))
+        .await
+        .unwrap();
     use tokio_tungstenite::tungstenite::Message;
     loop {
-        let msg = tokio::time::timeout(Duration::from_secs(10), ws2.next()).await.unwrap().unwrap().unwrap();
+        let msg = tokio::time::timeout(Duration::from_secs(10), ws2.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         let frame: Value = serde_json::from_str(&match msg {
             Message::Text(t) => t,
             _ => continue,
@@ -248,13 +292,17 @@ async fn reconnect_replay_after_reload_reports_snapshot_required() {
     ws2.send(Message::Text(
         json!({ "jsonrpc": "2.0", "id": 1, "method": "session.events.since",
                 "params": { "session_id": sid, "last_seen": 0, "replay_epoch": old_epoch } })
-            .to_string(),
+        .to_string(),
     ))
     .await
     .unwrap();
     let mut replay = None;
     for _ in 0..20 {
-        let msg = tokio::time::timeout(Duration::from_secs(10), ws2.next()).await.unwrap().unwrap().unwrap();
+        let msg = tokio::time::timeout(Duration::from_secs(10), ws2.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         let frame: Value = serde_json::from_str(&match msg {
             Message::Text(t) => t,
             _ => continue,
@@ -266,10 +314,18 @@ async fn reconnect_replay_after_reload_reports_snapshot_required() {
         }
     }
     let replay = replay.expect("no session.events.since reply");
-    assert_ne!(replay["replay_epoch"].as_str().unwrap(), old_epoch, "a reload mints a new epoch");
+    assert_ne!(
+        replay["replay_epoch"].as_str().unwrap(),
+        old_epoch,
+        "a reload mints a new epoch"
+    );
     assert_eq!(replay["truncated"], json!(true));
     assert_eq!(replay["snapshot_required"], json!(true));
-    assert_eq!(replay["events"].as_array().unwrap().len(), 0, "no live ring survives a restart");
+    assert_eq!(
+        replay["events"].as_array().unwrap().len(),
+        0,
+        "no live ring survives a restart"
+    );
 }
 
 #[tokio::test]

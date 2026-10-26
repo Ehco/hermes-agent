@@ -39,13 +39,21 @@ pub struct TicketStore {
 
 impl Clone for TicketStore {
     fn clone(&self) -> Self {
-        Self { ttl: self.ttl, tickets: Mutex::new(HashMap::new()), counter: AtomicU64::new(self.counter.load(Ordering::Relaxed)) }
+        Self {
+            ttl: self.ttl,
+            tickets: Mutex::new(HashMap::new()),
+            counter: AtomicU64::new(self.counter.load(Ordering::Relaxed)),
+        }
     }
 }
 
 impl TicketStore {
     pub fn new() -> Self {
-        Self { ttl: Duration::from_secs(TTL_SECONDS), tickets: Mutex::new(HashMap::new()), counter: AtomicU64::new(0) }
+        Self {
+            ttl: Duration::from_secs(TTL_SECONDS),
+            tickets: Mutex::new(HashMap::new()),
+            counter: AtomicU64::new(0),
+        }
     }
 
     /// One-shot ticket bound to this identity; `consume_ticket` hands `info`
@@ -58,10 +66,13 @@ impl TicketStore {
         if n > 0 {
             t.push_str(&format!("{n:x}"));
         }
-        self.tickets
-            .lock()
-            .unwrap()
-            .insert(t.clone(), Entry { expires_at: Instant::now() + self.ttl, info });
+        self.tickets.lock().unwrap().insert(
+            t.clone(),
+            Entry {
+                expires_at: Instant::now() + self.ttl,
+                info,
+            },
+        );
         self.gc_expired();
         t
     }

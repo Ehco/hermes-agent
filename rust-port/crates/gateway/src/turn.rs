@@ -25,11 +25,24 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TurnEvent {
-    TextDelta { text: String },
-    ToolCall { id: String, name: String, arguments: String },
-    ToolResult { call_id: String, output: String },
-    Done { text: String },
-    Error { message: String },
+    TextDelta {
+        text: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: String,
+    },
+    ToolResult {
+        call_id: String,
+        output: String,
+    },
+    Done {
+        text: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 impl TurnEvent {
@@ -70,7 +83,11 @@ where
                     text.push_str(&delta);
                     let _ = tx.send(TurnEvent::TextDelta { text: delta }).await;
                 }
-                StreamItem::ToolCall { id, name, arguments } => {
+                StreamItem::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                } => {
                     let _ = tx
                         .send(TurnEvent::ToolCall {
                             id: id.clone(),
@@ -108,11 +125,17 @@ where
                 Err(e) => format!("tool error: {e}"),
             };
             let _ = tx
-                .send(TurnEvent::ToolResult { call_id: id.clone(), output: output.clone() })
+                .send(TurnEvent::ToolResult {
+                    call_id: id.clone(),
+                    output: output.clone(),
+                })
                 .await;
             history.push(Message {
                 role: Role::Tool,
-                content: vec![Content::ToolResult { call_id: id, output }],
+                content: vec![Content::ToolResult {
+                    call_id: id,
+                    output,
+                }],
             });
         }
     }

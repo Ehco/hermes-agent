@@ -50,13 +50,21 @@ where
     H: ToolHost + Send + Sync + 'static,
 {
     pub fn new(transport: Arc<T>, host: Arc<H>) -> Self {
-        Self { transport, host, config: GatewayConfig::default() }
+        Self {
+            transport,
+            host,
+            config: GatewayConfig::default(),
+        }
     }
 
     /// Builder form: same pair, plus configurable guards
     /// (`cors_origins`, `max_body_bytes`).
     pub fn builder(transport: Arc<T>, host: Arc<H>) -> GatewayBuilder<T, H> {
-        GatewayBuilder { transport, host, config: GatewayConfig::default() }
+        GatewayBuilder {
+            transport,
+            host,
+            config: GatewayConfig::default(),
+        }
     }
 
     /// The fully-layered router. Layer order mirrors the Python middleware
@@ -68,19 +76,18 @@ where
             .route("/v1/chat", post(chat::<T, H>))
             .fallback(fallback_404)
             .with_state(self.clone());
-        app
-            .layer(axum::middleware::from_fn_with_state(
-                self.config.clone(),
-                security_headers_middleware,
-            ))
-            .layer(axum::middleware::from_fn_with_state(
-                self.config.clone(),
-                body_limit_middleware,
-            ))
-            .layer(axum::middleware::from_fn_with_state(
-                self.config.clone(),
-                cors_middleware,
-            ))
+        app.layer(axum::middleware::from_fn_with_state(
+            self.config.clone(),
+            security_headers_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            self.config.clone(),
+            body_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            self.config.clone(),
+            cors_middleware,
+        ))
     }
 }
 
@@ -120,7 +127,11 @@ where
     }
 
     pub fn build(self) -> Gateway<T, H> {
-        Gateway { transport: self.transport, host: self.host, config: self.config }
+        Gateway {
+            transport: self.transport,
+            host: self.host,
+            config: self.config,
+        }
     }
 }
 
@@ -185,7 +196,11 @@ where
                 let _ = tx.send(TurnEvent::Done { text }).await;
             }
             Err(e) => {
-                let _ = tx.send(TurnEvent::Error { message: format!("{e:#}") }).await;
+                let _ = tx
+                    .send(TurnEvent::Error {
+                        message: format!("{e:#}"),
+                    })
+                    .await;
             }
         }
         // `tx` drops here: the SSE stream closes after the last frame.
@@ -200,8 +215,11 @@ where
     let mut res = Sse::new(stream).into_response();
     // `_sse_headers`: the CORS middleware only decorates the response after the
     // handler returns, so these ride on the SSE response itself.
-    res.headers_mut().insert(header::CACHE_CONTROL, "no-cache".parse().unwrap());
     res.headers_mut()
-        .insert(axum::http::HeaderName::from_static("x-accel-buffering"), "no".parse().unwrap());
+        .insert(header::CACHE_CONTROL, "no-cache".parse().unwrap());
+    res.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-accel-buffering"),
+        "no".parse().unwrap(),
+    );
     res
 }

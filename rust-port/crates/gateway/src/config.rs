@@ -18,7 +18,10 @@ pub struct GatewayConfig {
 
 impl Default for GatewayConfig {
     fn default() -> Self {
-        Self { cors_origins: Vec::new(), max_body_bytes: MAX_REQUEST_BYTES }
+        Self {
+            cors_origins: Vec::new(),
+            max_body_bytes: MAX_REQUEST_BYTES,
+        }
     }
 }
 

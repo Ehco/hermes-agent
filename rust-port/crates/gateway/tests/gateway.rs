@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use axum::Router;
 use futures::Future;
+use hermes_core::agent::ToolHost;
 use hermes_core::test_transport::ScriptedTransport;
 use hermes_core::transport::{StreamItem, Transport};
-use hermes_core::agent::ToolHost;
 use hermes_gateway::{Gateway, RegistryHost};
 use serde_json::{json, Value};
 
@@ -41,7 +41,10 @@ fn parse_sse(body: &str) -> Vec<(String, Value)> {
                     data = Some(v.to_string());
                 }
             }
-            (event.expect("frame without event:"), serde_json::from_str::<Value>(&data.expect("frame without data:")).unwrap())
+            (
+                event.expect("frame without event:"),
+                serde_json::from_str::<Value>(&data.expect("frame without data:")).unwrap(),
+            )
         })
         .collect()
 }
@@ -51,7 +54,11 @@ fn parse_sse(body: &str) -> Vec<(String, Value)> {
 struct NeverHost;
 
 impl ToolHost for NeverHost {
-    fn execute(&self, _name: &str, _arguments: &str) -> impl Future<Output = anyhow::Result<String>> + Send {
+    fn execute(
+        &self,
+        _name: &str,
+        _arguments: &str,
+    ) -> impl Future<Output = anyhow::Result<String>> + Send {
         Box::pin(std::future::pending::<anyhow::Result<String>>())
     }
 }
@@ -77,10 +84,7 @@ async fn chat_streams_sse_with_documented_event_shape() {
         StreamItem::TextDelta("lo!".into()),
         StreamItem::Done,
     ]]);
-    let gw = Gateway::new(
-        Arc::new(transport),
-        Arc::new(NeverHost),
-    );
+    let gw = Gateway::new(Arc::new(transport), Arc::new(NeverHost));
     let base = spawn_app(gw.router()).await;
 
     let client = reqwest::Client::new();
@@ -94,7 +98,10 @@ async fn chat_streams_sse_with_documented_event_shape() {
 
     assert_eq!(res.status(), 200);
     // _sse_headers contract.
-    assert_eq!(res.headers().get("content-type").unwrap(), "text/event-stream");
+    assert_eq!(
+        res.headers().get("content-type").unwrap(),
+        "text/event-stream"
+    );
     assert_eq!(res.headers().get("cache-control").unwrap(), "no-cache");
 
     let frames = parse_sse(&res.text().await.unwrap());
@@ -146,9 +153,18 @@ async fn tool_bridge_executes_registry_tools_through_the_gateway() {
     let frames = parse_sse(&res.text().await.unwrap());
     let names: Vec<&str> = frames.iter().map(|(e, _)| e.as_str()).collect();
     // Tool calls stream as the model emits them; results follow in order.
-    assert_eq!(names, [
-        "text_delta", "tool_call", "tool_call", "tool_result", "tool_result", "text_delta", "done",
-    ]);
+    assert_eq!(
+        names,
+        [
+            "text_delta",
+            "tool_call",
+            "tool_call",
+            "tool_result",
+            "tool_result",
+            "text_delta",
+            "done",
+        ]
+    );
 
     // Tool calls are streamed as issued.
     assert_eq!(
@@ -165,12 +181,18 @@ async fn tool_bridge_executes_registry_tools_through_the_gateway() {
     let (ev, data) = &frames[3];
     assert_eq!(ev, "tool_result");
     assert_eq!(data["call_id"], "c1");
-    assert!(data["output"].as_str().unwrap().contains("success"), "got: {data}");
+    assert!(
+        data["output"].as_str().unwrap().contains("success"),
+        "got: {data}"
+    );
 
     let (ev, data) = &frames[4];
     assert_eq!(ev, "tool_result");
     assert_eq!(data["call_id"], "c2");
-    assert!(data["output"].as_str().unwrap().contains("bridge-ok"), "got: {data}");
+    assert!(
+        data["output"].as_str().unwrap().contains("bridge-ok"),
+        "got: {data}"
+    );
 
     assert_eq!(frames[6].1["text"], "All set.");
 
@@ -182,11 +204,16 @@ async fn unknown_path_returns_the_json_error_envelope() {
     let gw = Gateway::with_default_tools(Arc::new(ScriptedTransport::new(Vec::new())));
     let base = spawn_app(gw.router()).await;
 
-    let res = reqwest::get(format!("{base}/definitely/not/here")).await.unwrap();
+    let res = reqwest::get(format!("{base}/definitely/not/here"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), 404);
     let body = res.json::<Value>().await.unwrap();
     assert_eq!(body["error"]["type"], "invalid_request_error");
-    assert!(body["error"]["message"].as_str().unwrap().contains("/definitely/not/here"));
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("/definitely/not/here"));
 }
 
 #[tokio::test]
@@ -199,38 +226,51 @@ async fn chat_validates_the_request_body() {
     // Not JSON at all.
     let res = client.post(&url).body("not json").send().await.unwrap();
     assert_eq!(res.status(), 400);
-    assert_eq!(res.json::<Value>().await.unwrap()["error"]["message"],
-               "Request body must be valid JSON.");
+    assert_eq!(
+        res.json::<Value>().await.unwrap()["error"]["message"],
+        "Request body must be valid JSON."
+    );
 
     // JSON but not an object.
     let res = client.post(&url).json(&json!([1, 2])).send().await.unwrap();
     assert_eq!(res.status(), 400);
-    assert_eq!(res.json::<Value>().await.unwrap()["error"]["message"],
-               "Request body must be a JSON object.");
+    assert_eq!(
+        res.json::<Value>().await.unwrap()["error"]["message"],
+        "Request body must be a JSON object."
+    );
 
     // Missing messages.
-    let res = client.post(&url).json(&json!({ "tools": [] })).send().await.unwrap();
+    let res = client
+        .post(&url)
+        .json(&json!({ "tools": [] }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 400);
     let body = res.json::<Value>().await.unwrap();
     assert_eq!(body["error"]["message"], "Missing 'messages' field");
     assert_eq!(body["error"]["code"], "missing_messages");
 
     // Bad message shape.
-    let res = client.post(&url).json(&json!({ "messages": [{}] })).send().await.unwrap();
+    let res = client
+        .post(&url)
+        .json(&json!({ "messages": [{}] }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 400);
     assert!(res.json::<Value>().await.unwrap()["error"]["message"]
-        .as_str().unwrap().starts_with("Invalid messages payload"));
+        .as_str()
+        .unwrap()
+        .starts_with("Invalid messages payload"));
 }
 
 #[tokio::test]
 async fn oversized_request_body_is_rejected_with_413() {
     let transport = ScriptedTransport::new(Vec::new());
-    let gw = Gateway::builder(
-        Arc::new(transport),
-        Arc::new(RegistryHost::default()),
-    )
-    .max_body_bytes(64)
-    .build();
+    let gw = Gateway::builder(Arc::new(transport), Arc::new(RegistryHost::default()))
+        .max_body_bytes(64)
+        .build();
     let base = spawn_app(gw.router()).await;
 
     let client = reqwest::Client::new();
@@ -267,8 +307,10 @@ async fn invalid_content_length_is_rejected_with_400() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), 400);
-    let body = serde_json::from_slice::<Value>(&axum::body::to_bytes(res.into_body(), 8192).await.unwrap())
-        .unwrap();
+    let body = serde_json::from_slice::<Value>(
+        &axum::body::to_bytes(res.into_body(), 8192).await.unwrap(),
+    )
+    .unwrap();
     assert_eq!(body["error"]["message"], "Invalid Content-Length header.");
     assert_eq!(body["error"]["code"], "invalid_content_length");
 }
@@ -286,7 +328,12 @@ async fn origin_guard_and_cors_headers() {
     let url = format!("{base}/v1/chat");
 
     // Non-browser client (no Origin): allowed, no CORS headers.
-    let res = client.post(&url).json(&json!({ "messages": [user_message("hi")] })).send().await.unwrap();
+    let res = client
+        .post(&url)
+        .json(&json!({ "messages": [user_message("hi")] }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200);
     assert!(res.headers().get("access-control-allow-origin").is_none());
 
@@ -299,7 +346,10 @@ async fn origin_guard_and_cors_headers() {
         .await
         .unwrap();
     assert_eq!(res.status(), 200);
-    assert_eq!(res.headers().get("access-control-allow-origin").unwrap(), "https://good.example");
+    assert_eq!(
+        res.headers().get("access-control-allow-origin").unwrap(),
+        "https://good.example"
+    );
     assert_eq!(res.headers().get("vary").unwrap(), "Origin");
 
     // Unconfigured browser origin: bare 403.
@@ -321,7 +371,10 @@ async fn origin_guard_and_cors_headers() {
         .await
         .unwrap();
     assert_eq!(res.status(), 200);
-    assert_eq!(res.headers().get("access-control-allow-methods").unwrap(), "GET, POST, DELETE, OPTIONS");
+    assert_eq!(
+        res.headers().get("access-control-allow-methods").unwrap(),
+        "GET, POST, DELETE, OPTIONS"
+    );
 
     // Preflight with a disallowed origin: 403.
     let res = client
@@ -341,10 +394,19 @@ async fn security_headers_are_applied_to_every_response() {
     for path in ["/health", "/no/such/path"] {
         let res = reqwest::get(format!("{base}{path}")).await.unwrap();
         let headers = res.headers().clone();
-        assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff", "{path}");
+        assert_eq!(
+            headers.get("x-content-type-options").unwrap(),
+            "nosniff",
+            "{path}"
+        );
         assert_eq!(headers.get("x-frame-options").unwrap(), "DENY", "{path}");
         assert!(
-            headers.get("content-security-policy").unwrap().to_str().unwrap().contains("frame-ancestors"),
+            headers
+                .get("content-security-policy")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("frame-ancestors"),
             "{path}"
         );
     }

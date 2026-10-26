@@ -42,16 +42,27 @@ where
 {
     let offered: Vec<String> = headers
         .get("sec-websocket-protocol")
-        .map(|v| v.to_str().unwrap_or("").split(',').map(str::trim).map(str::to_string).collect())
+        .map(|v| {
+            v.to_str()
+                .unwrap_or("")
+                .split(',')
+                .map(str::trim)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let subprotocol_ticket = offered
         .iter()
         .find(|p| p.starts_with(TICKET_PROTOCOL_PREFIX))
         .map(|p| p[TICKET_PROTOCOL_PREFIX.len()..].to_string());
-    let canonical = params.contains_key("native_dial") || offered.iter().any(|p| p == GATEWAY_WS_PROTOCOL);
+    let canonical =
+        params.contains_key("native_dial") || offered.iter().any(|p| p == GATEWAY_WS_PROTOCOL);
 
     // 1. Ticket auth (one-use, 30 s TTL) — query string or subprotocol.
-    let ticket = params.get("ticket").filter(|t| !t.is_empty()).or(subprotocol_ticket.as_ref());
+    let ticket = params
+        .get("ticket")
+        .filter(|t| !t.is_empty())
+        .or(subprotocol_ticket.as_ref());
     let mut identity = None;
     if let Some(ticket) = ticket {
         match api.inner.tickets.consume(ticket) {
@@ -62,7 +73,9 @@ where
         }
     } else if let Some(token) = &api.inner.token {
         // 2. Static token auth for gated remote gateways.
-        let ok = params.get("token").is_some_and(|t| constant_time_eq(t, token));
+        let ok = params
+            .get("token")
+            .is_some_and(|t| constant_time_eq(t, token));
         if !ok {
             return auth_reject(StatusCode::UNAUTHORIZED, "auth: missing or bad token");
         }
@@ -88,7 +101,10 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 /// One connected socket: dispatch requests in arrival order and forward hub
@@ -152,7 +168,11 @@ async fn socket_loop<T, H>(
                 "parse error",
                 None,
             );
-            if sink.send(WsMessage::Text(resp.to_string().into())).await.is_err() {
+            if sink
+                .send(WsMessage::Text(resp.to_string().into()))
+                .await
+                .is_err()
+            {
                 break;
             }
             continue;
@@ -161,7 +181,11 @@ async fn socket_loop<T, H>(
             continue;
         }
         let id = req.get("id").cloned().unwrap_or(Value::Null);
-        let method = req.get("method").and_then(Value::as_str).unwrap_or("").to_string();
+        let method = req
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let params = req.get("params").cloned().unwrap_or(json!({}));
 
         // Heartbeat: answered inline without the dispatcher (`handle_ws`).
@@ -171,7 +195,11 @@ async fn socket_loop<T, H>(
             dispatch::dispatch(&api, handle, id, &method, params).await
         };
         if let Some(resp) = response {
-            if sink.send(WsMessage::Text(resp.to_string().into())).await.is_err() {
+            if sink
+                .send(WsMessage::Text(resp.to_string().into()))
+                .await
+                .is_err()
+            {
                 break;
             }
         }

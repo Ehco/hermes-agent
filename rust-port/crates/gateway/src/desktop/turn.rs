@@ -99,7 +99,12 @@ async fn run_one_turn<T, H>(
         "session.updated",
         json!({ "running": true, "admission_id": admission, "execution_generation": generation }),
     );
-    emit_event(inner, Some(session), "message.start", json!({ "text": text }));
+    emit_event(
+        inner,
+        Some(session),
+        "message.start",
+        json!({ "text": text }),
+    );
 
     let mut reply = String::new();
     let mut status = "ok".to_string();
@@ -110,7 +115,12 @@ async fn run_one_turn<T, H>(
             Ok(stream) => stream,
             Err(e) => {
                 status = "error".to_string();
-                emit_event(inner, Some(session), "error", json!({ "message": format!("{e:#}") }));
+                emit_event(
+                    inner,
+                    Some(session),
+                    "error",
+                    json!({ "message": format!("{e:#}") }),
+                );
                 break 'turn;
             }
         };
@@ -126,7 +136,11 @@ async fn run_one_turn<T, H>(
                         json!({ "text": delta }),
                     );
                 }
-                Ok(StreamItem::ToolCall { id, name, arguments }) => {
+                Ok(StreamItem::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                }) => {
                     emit_event(
                         inner,
                         Some(session),
@@ -138,7 +152,12 @@ async fn run_one_turn<T, H>(
                 Ok(StreamItem::Done) => break,
                 Err(e) => {
                     status = "error".to_string();
-                    emit_event(inner, Some(session), "error", json!({ "message": format!("{e:#}") }));
+                    emit_event(
+                        inner,
+                        Some(session),
+                        "error",
+                        json!({ "message": format!("{e:#}") }),
+                    );
                     break;
                 }
             }
@@ -147,7 +166,11 @@ async fn run_one_turn<T, H>(
         let mut assistant = Message::text(Role::Assistant, reply.clone());
         for (id, name, arguments) in &calls {
             assistant.content.push(Content::ToolUse {
-                call: ToolCall { id: id.clone(), name: name.clone(), arguments: arguments.clone() },
+                call: ToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                },
             });
         }
         session.persist(&assistant);
@@ -189,7 +212,10 @@ async fn run_one_turn<T, H>(
             );
             let result_msg = Message {
                 role: Role::Tool,
-                content: vec![Content::ToolResult { call_id: id, output }],
+                content: vec![Content::ToolResult {
+                    call_id: id,
+                    output,
+                }],
             };
             session.persist(&result_msg);
             session.history.lock().unwrap().push(result_msg);
@@ -197,7 +223,12 @@ async fn run_one_turn<T, H>(
     }
 
     // Reply segment boundary (`message.delta {text: null}`), then the complete.
-    emit_event(inner, Some(session), "message.delta", json!({ "text": null }));
+    emit_event(
+        inner,
+        Some(session),
+        "message.delta",
+        json!({ "text": null }),
+    );
     emit_event(
         inner,
         Some(session),
@@ -205,7 +236,12 @@ async fn run_one_turn<T, H>(
         json!({ "text": reply, "status": status, "admission_id": admission }),
     );
     session.running.store(false, Ordering::Relaxed);
-    emit_event(inner, Some(session), "session.updated", json!({ "running": false }));
+    emit_event(
+        inner,
+        Some(session),
+        "session.updated",
+        json!({ "running": false }),
+    );
 }
 
 /// The approval gate: "yolo" allows everything; "ask" raises an
@@ -258,5 +294,8 @@ where
     };
     // The answered prompt retires with its `<kind>.settled` event.
     super::dispatch::settle_prompt(&api.inner, session, &prompt_id);
-    Ok(matches!(answer.get("choice").and_then(Value::as_str), Some("allow") | Some("always")))
+    Ok(matches!(
+        answer.get("choice").and_then(Value::as_str),
+        Some("allow") | Some("always")
+    ))
 }
