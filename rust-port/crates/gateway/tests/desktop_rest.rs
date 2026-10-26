@@ -79,21 +79,52 @@ async fn sessions_list_rows_and_delete() {
     let snap = snap.expect("no session.create reply");
     let sid = snap["session_id"].as_str().unwrap().to_string();
 
-    // GET /api/sessions lists the row with the fields the sidebar renders.
+    // GET /api/sessions lists the row with the fields the sidebar renders
+    // (the SessionInfo contract in apps/desktop/src/types/hermes.ts).
     let listed: Value = client.get(format!("{base}/api/sessions")).send().await.unwrap().json().await.unwrap();
     assert_eq!(listed["total"], json!(1));
     let row = &listed["sessions"][0];
-    assert_eq!(row["session_id"], json!(sid));
+    assert_eq!(row["id"], json!(sid));
     assert_eq!(row["title"], json!("Side chat"));
-    for key in ["created_at", "last_active_at", "message_count", "preview", "archived", "is_active", "profile"] {
+    for key in ["started_at", "ended_at", "last_active", "message_count", "preview", "archived", "pinned", "unread", "is_active", "profile", "source", "cwd", "model", "input_tokens", "output_tokens", "tool_call_count"] {
         assert!(row.get(key).is_some(), "session row missing {key}");
     }
 
-    // GET /api/sessions/{id} and DELETE.
+    // GET /api/sessions/{id}, PATCH (rename), and DELETE (fenced receipt).
     let one: Value = client.get(format!("{base}/api/sessions/{sid}")).send().await.unwrap().json().await.unwrap();
-    assert_eq!(one["session_id"], json!(sid));
+    assert_eq!(one["id"], json!(sid));
+
+    let snapshot: Value = client.get(format!("{base}/api/sessions/{sid}/mutation-snapshot")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(snapshot["exists"], json!(true));
+    let revision = snapshot["runtime_revision"].as_u64().unwrap();
+
+    // A stale expected_revision refuses with the client's conflict verdict.
+    let stale = client
+        .patch(format!("{base}/api/sessions/{sid}"))
+        .json(&json!({ "title": "Nope", "expected_revision": revision + 3 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), reqwest::StatusCode::CONFLICT);
+
+    let renamed: Value = client
+        .patch(format!("{base}/api/sessions/{sid}"))
+        .json(&json!({ "title": "Renamed", "expected_revision": revision }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(renamed["ok"], json!(true));
+    assert_eq!(renamed["title"], json!("Renamed"));
+    assert!(renamed["runtime_revision"].as_u64().unwrap() > revision);
+    assert!(renamed["runtime_generation"].is_u64());
+
     let deleted: Value = client.delete(format!("{base}/api/sessions/{sid}")).send().await.unwrap().json().await.unwrap();
     assert_eq!(deleted["ok"], json!(true));
+    assert_eq!(deleted["exists"], json!(true));
+    assert!(deleted["runtime_revision"].is_u64());
     let listed: Value = client.get(format!("{base}/api/sessions")).send().await.unwrap().json().await.unwrap();
     assert_eq!(listed["total"], json!(0));
 }
@@ -115,24 +146,28 @@ async fn skills_list_content_toggle() {
     let base = spawn_app(&api).await;
     let client = http();
 
+    // GET /api/skills serves the bare SkillInfo[] the Capabilities pane renders.
     let listed: Value = client.get(format!("{base}/api/skills")).send().await.unwrap().json().await.unwrap();
-    assert_eq!(listed["count"], json!(1));
-    assert_eq!(listed["skills"][0]["name"], json!("greeter"));
-    assert_eq!(listed["skills"][0]["enabled"], json!(true));
+    let list = listed.as_array().expect("GET /api/skills must be an array");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["name"], json!("greeter"));
+    assert_eq!(list[0]["enabled"], json!(true));
+    assert_eq!(list[0]["provenance"], json!("agent"));
 
-    let raw = client
+    let content: Value = client
         .get(format!("{base}/api/skills/content?name=greeter"))
         .send()
         .await
         .unwrap()
-        .text()
+        .json()
         .await
         .unwrap();
-    let content: Value = serde_json::from_str(&raw).unwrap();
     assert!(content["content"].as_str().unwrap().contains("Hello body"));
+    assert!(content["path"].is_string());
 
+    // The toggle rides PUT (the method setSkillEnabled sends).
     let toggled: Value = client
-        .post(format!("{base}/api/skills/toggle"))
+        .put(format!("{base}/api/skills/toggle"))
         .json(&json!({ "name": "greeter", "enabled": false }))
         .send()
         .await
@@ -142,7 +177,7 @@ async fn skills_list_content_toggle() {
         .unwrap();
     assert_eq!(toggled["enabled"], json!(false));
     let listed: Value = client.get(format!("{base}/api/skills")).send().await.unwrap().json().await.unwrap();
-    assert_eq!(listed["skills"][0]["enabled"], json!(false));
+    assert_eq!(listed[0]["enabled"], json!(false));
 }
 
 #[tokio::test]

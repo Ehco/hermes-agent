@@ -111,6 +111,9 @@ where
     let omit = params.get("omit_messages").and_then(Value::as_bool).unwrap_or(false)
         || params.get("defer_history").and_then(Value::as_bool).unwrap_or(false);
     api.inner.hub.attach(handle, &session.id);
+    // Restore-on-resume: a stored transcript replays into the snapshot
+    // (Python `SessionDB.get_messages` on resume).
+    session.ensure_loaded();
     let snapshot = session.snapshot(omit, &api.inner.epoch);
     // Open prompts re-deliver in the snapshot; the live request events were
     // (or will be) emitted by their raiser.

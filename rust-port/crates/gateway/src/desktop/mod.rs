@@ -131,6 +131,10 @@ pub struct Session {
     pub cwd: Mutex<String>,
     pub model: Mutex<Option<String>>,
     pub archived: std::sync::atomic::AtomicBool,
+    /// Server-side pin flag (`sessions.pinned`; the sidebar's Pinned section).
+    pub pinned: std::sync::atomic::AtomicBool,
+    /// Derived read state (`sessions.unread` watermark).
+    pub unread: std::sync::atomic::AtomicBool,
     pub running: std::sync::atomic::AtomicBool,
     /// CAS revision for `session.mutate` (clients send `expected_revision`).
     pub revision: AtomicU64,
@@ -155,27 +159,45 @@ pub struct Session {
 }
 
 impl Session {
+    /// Fresh session: a new stored id and (when a store dir is configured) an
+    /// empty JSONL transcript beside it.
     pub fn new(cwd: impl Into<String>, store_dir: Option<&std::path::Path>) -> Self {
-        let id = new_id("sess");
+        Self::with_stored(cwd, &new_id("sess"), store_dir)
+    }
+
+    /// Stored session: reopens (or creates) `<stored_id>.jsonl` and replays its
+    /// lines into the in-memory history (Python: `SessionDB` resume = replay).
+    /// The id is the filename stem, so `stored_session_id` aliases resolve.
+    pub fn with_stored(
+        cwd: impl Into<String>,
+        stored_id: &str,
+        store_dir: Option<&std::path::Path>,
+    ) -> Self {
         let store = store_dir.and_then(|dir| {
-            hermes_session::SessionStore::open(dir.join(format!("{id}.jsonl"))).ok()
+            hermes_session::SessionStore::open(dir.join(format!("{stored_id}.jsonl"))).ok()
         });
+        let history = store
+            .as_ref()
+            .and_then(|s| s.load().ok())
+            .unwrap_or_default();
         Self {
-            stored_id: id.clone(),
-            id,
+            stored_id: stored_id.to_string(),
+            id: stored_id.to_string(),
             title: Mutex::new(String::new()),
             created_at: epoch_secs(),
             last_active_at: Mutex::new(epoch_secs()),
             cwd: Mutex::new(cwd.into()),
             model: Mutex::new(None),
             archived: std::sync::atomic::AtomicBool::new(false),
+            pinned: std::sync::atomic::AtomicBool::new(false),
+            unread: std::sync::atomic::AtomicBool::new(false),
             running: std::sync::atomic::AtomicBool::new(false),
             revision: AtomicU64::new(1),
             generation: AtomicU64::new(1),
             seq: AtomicU64::new(0),
             source: Mutex::new("gui".into()),
             approval_mode: Mutex::new("yolo".into()),
-            history: Mutex::new(Vec::new()),
+            history: Mutex::new(history),
             prompts: Mutex::new(Vec::new()),
             ring: Mutex::new(std::collections::VecDeque::new()),
             turn: Mutex::new(None),
@@ -196,6 +218,33 @@ impl Session {
     pub fn persist(&self, msg: &hermes_core::Message) {
         if let Some(store) = self.store.lock().unwrap().as_ref() {
             let _ = store.append(msg);
+        }
+    }
+
+    /// Restore-on-resume: when the in-memory history is empty but the JSONL
+    /// store holds lines, replay them (covers a store written before this
+    /// process registered the session — e.g. another gateway instance).
+    pub fn ensure_loaded(&self) {
+        {
+            let history = self.history.lock().unwrap();
+            if !history.is_empty() {
+                return;
+            }
+        }
+        let store = self.store.lock().unwrap();
+        if let Some(store) = store.as_ref() {
+            if let Ok(loaded) = store.load() {
+                if !loaded.is_empty() {
+                    *self.history.lock().unwrap() = loaded;
+                }
+            }
+        }
+    }
+
+    /// Remove the transcript file (the sidebar's DELETE).
+    pub fn delete_store(&self) {
+        if let Some(store) = self.store.lock().unwrap().as_ref() {
+            let _ = std::fs::remove_file(store.path());
         }
     }
 
@@ -220,11 +269,42 @@ impl Session {
             "message_count": count,
             "preview": preview,
             "archived": self.archived.load(Ordering::Relaxed),
-            "pinned": false,
+            "pinned": self.pinned.load(Ordering::Relaxed),
+            "unread": self.unread.load(Ordering::Relaxed),
             "is_active": self.running.load(Ordering::Relaxed),
             "source": self.source.lock().unwrap().clone(),
             "cwd": self.cwd.lock().unwrap().clone(),
             "profile": "default",
+        })
+    }
+
+    /// The REST row (`GET /api/sessions`): the `SessionInfo` contract in
+    /// apps/desktop/src/types/hermes.ts — the sidebar renders `id` (not the
+    /// WS shape's `session_id`), `last_active`, `started_at`, token counts.
+    pub fn rest_row(&self) -> Value {
+        json!({
+            "id": self.id,
+            "title": self.title.lock().unwrap().clone(),
+            "started_at": self.created_at,
+            "ended_at": Value::Null,
+            "last_active": self.last_active(),
+            "message_count": self.history.lock().unwrap().len(),
+            "preview": self.preview_text(),
+            "source": self.source.lock().unwrap().clone(),
+            "cwd": self.cwd.lock().unwrap().clone(),
+            "model": self.model.lock().unwrap().clone(),
+            "is_active": self.running.load(Ordering::Relaxed),
+            "archived": self.archived.load(Ordering::Relaxed),
+            "pinned": self.pinned.load(Ordering::Relaxed),
+            "unread": self.unread.load(Ordering::Relaxed),
+            "hidden": false,
+            "profile": "default",
+            "is_default_profile": true,
+            "git_branch": Value::Null,
+            "git_repo_root": Value::Null,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "tool_call_count": 0,
         })
     }
 
@@ -406,6 +486,36 @@ pub struct DesktopInner {
     pub hub: EventHub,
 }
 
+impl DesktopInner {
+    /// Server-start recovery: register every stored transcript in `dir` (one
+    /// `<session_id>.jsonl` per file) so the sidebar lists restored sessions
+    /// with their on-disk message counts before anyone resumes them.
+    pub fn restore_sessions(&self, dir: &std::path::Path) -> usize {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return 0,
+        };
+        let mut restored = 0;
+        let mut registry = self.registry.lock().unwrap();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if registry.contains_key(stem) {
+                continue;
+            }
+            let session = Arc::new(Session::with_stored(".", stem, Some(dir)));
+            registry.insert(session.id.clone(), session);
+            restored += 1;
+        }
+        restored
+    }
+}
+
 /// Manual: `std::sync::Mutex` is not `Clone`; the clone takes a snapshot
 /// (builder-pattern use only — a cloned `DesktopInner` is a fresh server).
 impl Clone for DesktopInner {
@@ -477,10 +587,14 @@ where
         Self { inner: Arc::new(inner), ..self }
     }
 
-    /// Configure the per-session JSONL transcript store dir.
+    /// Configure the per-session JSONL transcript store dir. Existing
+    /// transcripts in the dir are restored into the registry (server-start
+    /// recovery), so the sidebar lists them with their on-disk counts.
     pub fn with_store_dir(self, dir: impl Into<PathBuf>) -> Self {
         let mut inner = (*self.inner).clone();
-        inner.store_dir = Some(dir.into());
+        let dir = dir.into();
+        inner.restore_sessions(&dir);
+        inner.store_dir = Some(dir);
         Self { inner: Arc::new(inner), ..self }
     }
 

@@ -468,12 +468,16 @@ pub fn spawn_background_in(dir: &Path, command: &str, cwd: Option<&str>) -> Stri
             match exited {
                 None => std::thread::sleep(Duration::from_millis(WAIT_POLL_MS)),
                 Some(code) => {
-                    running().lock().unwrap().remove(&monitor_id);
+                    // Finalize metadata BEFORE leaving the live map: the moment
+                    // the id disappears from `running()`, any waiter treats the
+                    // session as exited, so the exit code must already be on
+                    // disk (a waiter in between would stamp exited/null).
                     if let Some(mut meta) = read_meta(&meta_path_dir, &monitor_id) {
                         meta["status"] = "exited".into();
                         meta["exit_code"] = json!(code);
                         write_meta(&meta_path_dir, &meta);
                     }
+                    running().lock().unwrap().remove(&monitor_id);
                     break;
                 }
             }
