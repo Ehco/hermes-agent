@@ -1,0 +1,273 @@
+diff --git a/apps/desktop/electron/agent-bin.test.ts b/apps/desktop/electron/agent-bin.test.ts
+new file mode 100644
+index 00000000..ceff464e
+--- /dev/null
++++ b/apps/desktop/electron/agent-bin.test.ts
+@@ -0,0 +1,54 @@
++import assert from 'node:assert/strict'
++import os from 'node:os'
++import path from 'node:path'
++
++import { test } from 'vitest'
++
++import { resolveAgentBinBackend } from './agent-bin'
++
++const ARGS = ['--profile', 'work', 'gateway', 'ensure', '--json']
++
++test('unset / blank HERMES_AGENT_BIN resolves to null (Python default untouched)', () => {
++  assert.equal(resolveAgentBinBackend(undefined, ARGS), null)
++  assert.equal(resolveAgentBinBackend('', ARGS), null)
++  assert.equal(resolveAgentBinBackend('   ', ARGS), null)
++})
++
++test('an unresolvable override name falls through like a missing file', () => {
++  // No isFile injection: the default probe answers for real files only, so a
++  // PATH-style bare name (no existing file behind it in cwd) resolves to null.
++  assert.equal(resolveAgentBinBackend('definitely-not-here.exe', ARGS), null)
++})
++
++test('a directory is not a backend', () => {
++  assert.equal(resolveAgentBinBackend(os.tmpdir(), ARGS), null)
++})
++
++test('an existing file resolves the Rust agent backend contract', () => {
++  const env = { PYTHONHOME: '/leaked/python', PYTHONPATH: '/leaked/other' }
++  const file = path.join('C:\\tools', 'hermes-gateway.exe')
++  const backend = resolveAgentBinBackend(file, ARGS, {
++    currentEnv: env,
++    isFile: candidate => candidate === file
++  })
++
++  assert.ok(backend)
++  assert.equal(backend.command, file)
++  assert.equal(backend.shell, false)
++  assert.equal(backend.bootstrap, false)
++  assert.equal(backend.kind, 'command')
++  assert.equal(backend.rustAgent, true)
++  assert.deepEqual(backend.args, ARGS)
++  assert.equal(backend.root, 'C:\\tools')
++  assert.equal(backend.env.PYTHONHOME, '')
++  assert.equal(backend.env.PYTHONPATH, '')
++})
++
++test('relative overrides resolve against the process cwd', () => {
++  // Injectable probe: the value need not exist on disk for this assertion.
++  const backend = resolveAgentBinBackend(path.join('bin', 'hermes-gateway.exe'), [], { isFile: () => true })
++
++  assert.ok(backend)
++  assert.equal(backend.command, path.resolve(process.cwd(), 'bin', 'hermes-gateway.exe'))
++  assert.equal(path.isAbsolute(backend.command), true)
++})
+diff --git a/apps/desktop/electron/agent-bin.ts b/apps/desktop/electron/agent-bin.ts
+new file mode 100644
+index 00000000..cd2d3dcc
+--- /dev/null
++++ b/apps/desktop/electron/agent-bin.ts
+@@ -0,0 +1,96 @@
++import { statSync } from 'node:fs'
++import path from 'node:path'
++
++import { buildDesktopBackendEnv } from './backend-env'
++
++/**
++ * HERMES_AGENT_BIN — a supported override that makes Desktop launch the Rust
++ * gateway binary (the Rust port's `hermes-gateway`, crates/gateway) instead of
++ * the Python pipeline. Unset — or pointing at a path that is not a readable
++ * file — keeps the default Python resolution ladder below completely
++ * untouched, so this is zero-risk for existing installs.
++ *
++ * The binary is spawned through the SAME bounded client protocol the Python
++ * CLI serves (local-gateway.ts `runGatewayEnsure`): Desktop runs
++ * `<bin> [--profile P] gateway ensure --json`, the child ensures a detached
++ * gateway owner and prints the single-line JSON verdict
++ * `{state:'ready', endpoint:{profile_id, instance_id, runtime_protocol:1,
++ * api_origin, capabilities:['session-authority-v1'], ...}}` whose
++ * `api_origin` is the loopback REST + `/api/ws` origin the UI dials. Nothing
++ * else in the boot changes: no ready-file, no fixed port, no stdout parsing
++ * beyond the ensure verdict.
++ *
++ * Ticket grants differ from Python only in where they are minted: the Rust
++ * owner serves no Python control pipe/socket for the bridge to answer, so
++ * Desktop mints over the gateway's own `POST /api/auth/ws-ticket` (the same
++ * endpoint the Python gateway exposes). See local-gateway.ts
++ * `configureRestGatewayTicketClient`.
++ */
++export interface AgentBinBackend {
++  kind: 'command'
++  label: string
++  command: string
++  args: string[]
++  env: NodeJS.ProcessEnv
++  root: string
++  bootstrap: false
++  shell: false
++  local: 'bundled'
++  /** Marks this backend as the Rust agent: ticket minting goes over the gateway's own REST mint. */
++  rustAgent: true
++}
++
++/**
++ * Resolve HERMES_AGENT_BIN into a spawnable backend, or null when the
++ * override is unset/blank/not-a-file (the caller then falls through to the
++ * Python ladder and logs why).
++ *
++ * `isFile` is injectable for tests; `statSync(p).isFile()` in production.
++ * Relative paths resolve against the Desktop process cwd, like every other
++ * resolver here.
++ */
++export function resolveAgentBinBackend(
++  raw: string | undefined,
++  backendArgs: string[],
++  { currentEnv, isFile }: {
++    currentEnv?: NodeJS.ProcessEnv
++    isFile?: (candidate: string) => boolean
++  } = {}
++): AgentBinBackend | null {
++  const value = String(raw ?? '').trim()
++
++  if (!value) {
++    return null
++  }
++
++  const resolved = path.resolve(value)
++  const probe = isFile ?? defaultIsFile
++
++  if (!probe(resolved)) {
++    return null
++  }
++
++  return {
++    kind: 'command',
++    label: `Rust agent (HERMES_AGENT_BIN) at ${resolved}`,
++    command: resolved,
++    args: [...backendArgs],
++    // Same scrubbed env the Python rungs hand the spawn (PYTHONPATH/HOME
++    // leakage removed); HERMES_HOME and the profile parent env ride with the
++    // spawn site in main.ts / runGatewayEnsure.
++    env: buildDesktopBackendEnv({ currentEnv: currentEnv ?? process.env }),
++    root: path.dirname(resolved),
++    bootstrap: false,
++    shell: false,
++    local: 'bundled',
++    rustAgent: true
++  }
++}
++
++function defaultIsFile(candidate: string): boolean {
++  try {
++    return statSync(candidate).isFile()
++  } catch {
++    return false
++  }
++}
+diff --git a/apps/desktop/electron/local-gateway.ts b/apps/desktop/electron/local-gateway.ts
+index 2ae46bc6..8ef87646 100644
+--- a/apps/desktop/electron/local-gateway.ts
++++ b/apps/desktop/electron/local-gateway.ts
+@@ -528,6 +528,40 @@ export function configurePythonGatewayTicketClient(client: NonNullable<typeof py
+   pythonTicketClient = client
+ }
+ 
++/**
++ * HERMES_AGENT_BIN (Rust gateway) ticket mint: the Rust owner serves no Python
++ * control pipe/socket for the bridge above to answer, so tickets are minted
++ * over the gateway's own `POST /api/auth/ws-ticket` — the same endpoint the
++ * Python gateway exposes (`hermes_cli/dashboard_auth/ws_tickets.py`). Enabled
++ * when Desktop resolves the Rust agent (`configureRestGatewayTicketClient`);
++ * every other install keeps the bridge/control-socket paths below untouched.
++ */
++let restTicketClient: ((endpoint: GatewayEndpoint, purpose: GatewayTicketPurpose) => Promise<string>) | undefined
++
++export function configureRestGatewayTicketClient(client?: NonNullable<typeof restTicketClient>) {
++  restTicketClient = client
++}
++
++export async function mintRestGatewayTicket(endpoint: GatewayEndpoint, _purpose: GatewayTicketPurpose): Promise<string> {
++  const res = await fetch(`${endpoint.api_origin}/api/auth/ws-ticket`, {
++    method: 'POST',
++    headers: { 'content-type': 'application/json' },
++    body: '{}'
++  })
++
++  if (!res.ok) {
++    throw new Error(`Gateway ticket bootstrap failed: POST /api/auth/ws-ticket answered ${res.status}`)
++  }
++
++  const payload = (await res.json()) as { ticket?: unknown }
++
++  if (typeof payload?.ticket !== 'string' || !payload.ticket) {
++    throw new Error('Gateway ticket bootstrap failed: no ticket in the REST mint answer')
++  }
++
++  return payload.ticket
++}
++
+ async function mintGroupWritableHome(endpoint: GatewayEndpoint, purpose: GatewayTicketPurpose, homes: string[]) {
+   if (!pythonTicketClient) {throw new Error(`Unsafe gateway control path: profile home is group-writable and this Desktop cannot verify the group is private: run chmod g-w ${homes.map(shellQuote).join(' ')}`)}
+ 
+@@ -620,6 +654,12 @@ export function ticketScope(purpose: GatewayTicketPurpose): { scope?: 'host' } {
+ }
+ 
+ export async function mintLocalGatewayTicket(endpoint: GatewayEndpoint, purpose: GatewayTicketPurpose = 'interactive'): Promise<string> {
++  // HERMES_AGENT_BIN: the Rust owner has no Python control socket to bridge;
++  // its own REST mint answers instead (see configureRestGatewayTicketClient).
++  if (restTicketClient) {
++    return restTicketClient(endpoint, purpose)
++  }
++
+   if (process.platform === 'win32') {
+     if (!pythonTicketClient) {throw new Error('Gateway ticket client is not configured')}
+ 
+diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
+index 0eff77e4..56f490fe 100644
+--- a/apps/desktop/electron/main.ts
++++ b/apps/desktop/electron/main.ts
+@@ -1,7 +1,8 @@
+ import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
+ 
+-import type { GatewayEndpoint } from './local-gateway'
+-import { configurePythonGatewayTicketClient, createLocalGatewayDials, createStaleGatewayRestarter, ensureLocalGateway, gatewayOwnerProfile, localGatewayDial, nativeGatewayHttpHeaders, redialLocalGateway, runGatewayEnsure, runGatewayOwnerRestart } from './local-gateway'
++import { resolveAgentBinBackend } from './agent-bin'
++import { type GatewayEndpoint } from './local-gateway'
++import { configurePythonGatewayTicketClient, configureRestGatewayTicketClient, createLocalGatewayDials, createStaleGatewayRestarter, ensureLocalGateway, gatewayOwnerProfile, localGatewayDial, mintRestGatewayTicket, nativeGatewayHttpHeaders, redialLocalGateway, runGatewayEnsure, runGatewayOwnerRestart } from './local-gateway'
+ import { closeGatewayTicketBridges, createGatewayTicketResolver } from './local-gateway-python'
+ import { createPluginWsUrlHandler } from './plugin-ws-url'
+ const localGatewayDials = createLocalGatewayDials()
+@@ -4894,6 +4895,28 @@ function writeDefaultProjectDir(dir) {
+ const installedRuntimeGate = createInstalledRuntimeGate(process.env, rememberLog)
+ 
+ async function resolveHermesBackend(backendArgs: string[]): Promise<ResolvedHermesBackend> {
++  // 0. HERMES_AGENT_BIN — an explicit override that launches the Rust gateway
++  //    binary (the Rust port's `hermes-gateway`) instead of any Python
++  //    runtime. The binary speaks the same bounded `gateway ensure --json`
++  //    client protocol (single-line JSON verdict whose endpoint.api_origin is
++  //    the loopback REST + /api/ws origin the UI dials), so owner discovery,
++  //    attach and the socket dial are unchanged. Ticket grants go over the
++  //    gateway's own REST mint because the Python control-socket bridge has
++  //    no owner to answer it. Unset — or not a readable file — keeps the
++  //    Python ladder below completely untouched (zero-risk default).
++  const agentBackend = resolveAgentBinBackend(process.env.HERMES_AGENT_BIN, backendArgs)
++
++  if (agentBackend) {
++    rememberLog(`[backend] using ${agentBackend.label}`)
++    configureRestGatewayTicketClient(mintRestGatewayTicket)
++
++    return agentBackend
++  }
++
++  if (process.env.HERMES_AGENT_BIN) {
++    rememberLog(`[backend] HERMES_AGENT_BIN=${process.env.HERMES_AGENT_BIN} is not a readable file; falling through to the Python runtime ladder`)
++  }
++
+   const payload = bundledPayload(process.resourcesPath)
+ 
+   if (payload) {
+@@ -5089,6 +5112,8 @@ interface ResolvedHermesBackend {
+   env: NodeJS.ProcessEnv
+   bootstrap: boolean
+   shell: boolean
++  /** HERMES_AGENT_BIN resolved to the Rust gateway: ticket grants go over its REST mint. */
++  rustAgent?: boolean
+   local?: string
+   root?: string
+   ticketCommand?: string

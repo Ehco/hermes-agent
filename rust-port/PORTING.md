@@ -95,11 +95,10 @@ Deferred with reasons:
   browse) are already ported and stay as-is.
 
 ## Queue (next → later; one agent per wave)
-1. W11 tools batch 4 + niche subsystems (voice transcription, Honcho, evals).
-2. W12 desktop spawn wiring: launch the Rust binary instead of Python
+1. W12 desktop spawn wiring: launch the Rust binary instead of Python
    (scratch clone of apps/desktop; never touch the live repo's checkout).
 - Backlog: long-tail tools until registry parity; Discord TLS+wss; Slack
   admin/file lanes; MCP server side; optional-skills content.
 
 ## Verification totals
-- W10 push: 505 tests / 0 failures, 11 crates, build clean. Branch files: 141.
+- W11 push: 522 tests / 0 failures, 11 crates, build clean. Branch files: 143.
