@@ -11,7 +11,7 @@ use serde_json::json;
 use hermes_core::model::ToolSpec;
 
 use crate::{cronjob, delegate_task, edit, image_generate, list_dir, maps, memory, process_manage, read_file, search,
-            session_search, skills, terminal, todo_list, tts, util, web_extract, web_search, write_file, x_search};
+            session_search, skills, terminal, todo_list, tool_search, tts, util, web_extract, web_search, write_file, x_search};
 
 pub struct ToolRegistry {
     specs: Vec<ToolSpec>,
@@ -58,6 +58,12 @@ impl ToolRegistry {
     }
 }
 
+/// Whether `name` is a registered built-in (free-standing lookup used by the
+/// tool_search bridge for core/deferrable classification).
+pub fn spec_exists(name: &str) -> bool {
+    specs().iter().any(|s| s.name == name)
+}
+
 /// Synchronous dispatch used directly by sync callers and tests.
 pub fn execute_sync(name: &str, args: &Value) -> String {
     match name {
@@ -82,6 +88,11 @@ pub fn execute_sync(name: &str, args: &Value) -> String {
         "text_to_speech" => tts::execute(args),
         "delegate_task" => delegate_task::execute(args),
         "skill_manage" => skills::execute_manage(args),
+        // Progressive tool disclosure bridges (Python tools/tool_search.py):
+        // search the deferred-tool catalog, load schemas, invoke deferred tools.
+        "tool_search" => tool_search::execute_search(args),
+        "tool_describe" => tool_search::execute_describe(args),
+        "tool_call" => tool_search::execute_call(args),
         other => util::tool_error(format!("Unknown tool: {other}")),
     }
 }
@@ -437,6 +448,47 @@ pub fn specs() -> Vec<ToolSpec> {
                 "required": ["operations"]
             }),
         },
+        ToolSpec {
+            name: "tool_search".into(),
+            description: "Search additional tools that are loaded on demand. Send one keyword query per capability you need; returns matching tool names and descriptions. Then `tool_describe` loads schemas and `tool_call` invokes. Tools already in your tool list need no search.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "queries": {"type": "array", "items": {"type": "string"}, "description": "One query per capability: service + action + object keywords (e.g. ['gmail send email', 'github create issue']), never a question; every word must match tool text. Searched in parallel."},
+                    "limit": {"type": "integer", "description": "Max matches per query (default 5)."}
+                },
+                "required": ["queries"]
+            }),
+        },
+        ToolSpec {
+            name: "tool_describe".into(),
+            description: "Load the full JSON schemas for tools returned by `tool_search`. Required before `tool_call` if a tool's parameters are unknown. Batch every schema you need into one call.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "names": {"type": "array", "items": {"type": "string"}, "description": "Exact tool names (as returned by tool_search). A single string is accepted and treated as one name."}
+                },
+                "required": ["names"]
+            }),
+        },
+        ToolSpec {
+            name: "tool_call".into(),
+            description: "Invoke deferred tools: `calls` is an array of {name, arguments}, one entry per invocation (batch independent calls; results come back in order). Arguments match the schema from `tool_describe`; approvals and hooks apply as usual.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "calls": {"type": "array", "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "Exact tool name to invoke."},
+                            "arguments": {"type": "object", "description": "Arguments matching the tool schema."}
+                        },
+                        "required": ["name", "arguments"]
+                    }, "description": "One or more independent deferred tool invocations."}
+                },
+                "required": ["calls"]
+            }),
+        },
     ]
 }
 
@@ -448,7 +500,7 @@ mod tests {
     #[tokio::test]
     async fn dispatches_by_name() {
         let reg = ToolRegistry::new();
-        assert_eq!(reg.specs().len(), 21);
+        assert_eq!(reg.specs().len(), 24);
 
         let out = reg.dispatch("read_file", &json!({"path": "nonexistent-xyz"})).await;
         assert!(out.contains("error"));

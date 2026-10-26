@@ -23,6 +23,7 @@ pub mod session_search;
 pub mod skills;
 pub mod terminal;
 pub mod todo_list;
+pub mod tool_search;
 pub mod tts;
 pub mod util;
 pub mod web_common;
