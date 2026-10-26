@@ -10,8 +10,8 @@ use serde_json::json;
 
 use hermes_core::model::ToolSpec;
 
-use crate::{cronjob, edit, image_generate, list_dir, memory, read_file, search, session_search, skills, terminal,
-            todo_list, util, web_extract, web_search, write_file};
+use crate::{cronjob, delegate_task, edit, image_generate, list_dir, maps, memory, process_manage, read_file, search,
+            session_search, skills, terminal, todo_list, tts, util, web_extract, web_search, write_file, x_search};
 
 pub struct ToolRegistry {
     specs: Vec<ToolSpec>,
@@ -76,6 +76,12 @@ pub fn execute_sync(name: &str, args: &Value) -> String {
         "skill_view" => skills::execute_view(args),
         "cronjob_manage" | "cronjob" => cronjob::execute(args),
         "session_search" => session_search::execute(args),
+        "process_manage" => process_manage::execute(args),
+        "x_search" => x_search::execute(args),
+        "maps" => maps::execute(args),
+        "text_to_speech" => tts::execute(args),
+        "delegate_task" => delegate_task::execute(args),
+        "skill_manage" => skills::execute_manage(args),
         other => util::tool_error(format!("Unknown tool: {other}")),
     }
 }
@@ -155,13 +161,14 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "terminal".into(),
-            description: "Execute a shell command. Returns stdout, stderr and exit_code. Use read_file/search instead of cat/grep. Async subprocess with a timeout (default 60s, max 600s); an expired command is killed and `timed_out: true` is returned.".into(),
+            description: "Execute a shell command. Returns stdout, stderr and exit_code. Use read_file/search instead of cat/grep. Async subprocess with a timeout (default 60s, max 600s); an expired command is killed and `timed_out: true` is returned. With background=true the command runs detached: the call returns a session_id at once and process_manage polls/waits/kills it; with notify=true a completion notification is queued.".into(),
             schema: json!({
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "The shell command to execute"},
                     "cwd": {"type": "string", "description": "Working directory for the command (default: the process cwd)"},
-                    "timeout": {"type": "integer", "description": "Max seconds (default 60, max 600). Above 600s the command is killed.", "default": 60, "maximum": 600}
+                    "timeout": {"type": "integer", "description": "Max seconds (default 60, max 600). Above 600s the command is killed.", "default": 60, "maximum": 600},
+                    "background": {"type": "boolean", "description": "Run detached; returns a session_id immediately. Manage the session with process_manage (poll/log/wait/kill/write/submit/close).", "default": false}
                 },
                 "required": ["command"]
             }),
@@ -318,6 +325,118 @@ pub fn specs() -> Vec<ToolSpec> {
                 "required": []
             }),
         },
+        ToolSpec {
+            name: "process_manage".into(),
+            description: "Poll, wait on, or kill background terminal processes (from terminal(background=true)). Completed results remain retrievable by session_id when resuming their owning conversation (up to 7 days, newest 64 results per profile; rolling output tail). poll: status + new output. log: full output, paged. wait: block until exit or timeout (partial output on timeout). write vs submit: submit appends Enter — use it to answer prompts; write sends raw bytes, no newline. close: EOF stdin. kill: terminate. handoff (subagents only): transfer a running process you started to your parent agent, which then receives its completion; `data` = one sentence on its purpose. Subagent-owned processes are otherwise killed when the subagent finishes and their notifications never reach the parent.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "poll", "log", "wait", "kill", "write", "submit", "close", "handoff"], "description": "The verb; write-vs-submit is the one real trap (a lone \\n on a Windows PTY is not Enter)."},
+                    "session_id": {"type": "string", "description": "From terminal background output; any unique prefix works ('4dae' for proc_4dae56ca81f6). Required except for 'list'."},
+                    "data": {"type": "string", "description": "Stdin text for write/submit; purpose sentence for handoff."},
+                    "timeout": {"type": "integer", "description": "Max seconds for 'wait'.", "minimum": 1},
+                    "offset": {"type": "integer", "description": "Log line offset (default: last 200)."},
+                    "limit": {"type": "integer", "description": "Max log lines.", "minimum": 1}
+                },
+                "required": ["action"]
+            }),
+        },
+        ToolSpec {
+            name: "x_search".into(),
+            description: "Search X (Twitter) posts, profiles, and threads using xAI's built-in X Search tool. Read-only discovery only: use this for current discussion, reactions, or claims on public X rather than general web pages. Do not use it to post, reply, like, DM, upload media, delete, or inspect the user's authenticated X account — those require a separate authenticated X API surface outside this tool. Available when xAI credentials are configured (SuperGrok OAuth or XAI_API_KEY).".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to look up on X."},
+                    "allowed_x_handles": {"type": "array", "items": {"type": "string"}, "description": "Optional list of X handles to include exclusively (max 10)."},
+                    "excluded_x_handles": {"type": "array", "items": {"type": "string"}, "description": "Optional list of X handles to exclude (max 10)."},
+                    "from_date": {"type": "string", "description": "Optional start date in YYYY-MM-DD format."},
+                    "to_date": {"type": "string", "description": "Optional end date in YYYY-MM-DD format."},
+                    "enable_image_understanding": {"type": "boolean", "description": "Whether xAI should analyze images attached to matching X posts.", "default": false},
+                    "enable_video_understanding": {"type": "boolean", "description": "Whether xAI should analyze videos attached to matching X posts.", "default": false}
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolSpec {
+            name: "maps".into(),
+            description: "Geocode, reverse-geocode, road distance, turn-by-turn directions, and timezone lookup — powered by OpenStreetMap/Nominatim, OSRM, and TimeAPI.io (no API key needed). action='search' geocodes a free-text place; 'reverse' names coordinates; 'distance'/'directions' route between two places (mode: driving, walking, cycling); 'timezone' reads the timezone for lat/lon.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["search", "reverse", "distance", "directions", "timezone"], "description": "The lookup verb."},
+                    "query": {"type": "string", "description": "search only: the free-text place to geocode."},
+                    "from": {"type": "string", "description": "distance/directions only: origin place (free text)."},
+                    "to": {"type": "string", "description": "distance/directions only: destination place (free text)."},
+                    "mode": {"type": "string", "enum": ["driving", "walking", "cycling"], "description": "distance/directions only."},
+                    "lat": {"type": "number", "description": "reverse/timezone only: latitude [-90, 90]."},
+                    "lon": {"type": "number", "description": "reverse/timezone only: longitude [-180, 180]."},
+                    "limit": {"type": "integer", "description": "search only: max results (default 5).", "default": 5}
+                },
+                "required": ["action"]
+            }),
+        },
+        ToolSpec {
+            name: "text_to_speech".into(),
+            description: "Convert text to speech audio. Writes an audio file (default: the Hermes audio cache, <timestamp>.mp3) and returns its path. Voice and provider are user-configured; the call picks the configured OpenAI-compatible speech endpoint.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "The text to convert to speech. Longer input is split into ordered chunks without silent truncation."},
+                    "output_path": {"type": "string", "description": "Optional custom file path to save the audio. Defaults to the Hermes audio cache."},
+                    "speed": {"type": "number", "description": "Playback speed multiplier. 1.0 = normal. Range: 0.25-4.0."},
+                    "instructions": {"type": "string", "description": "Optional voice-design guidance: tone, emotion, pacing, accent, whispering."}
+                },
+                "required": ["text"]
+            }),
+        },
+        ToolSpec {
+            name: "delegate_task".into(),
+            description: "Spawn one or more subagents in isolated contexts: reasoning-heavy subtasks, work that would flood your context, or independent parallel workstreams. Children know nothing of this conversation: pass everything needed via 'context'. While children run, action (list/steer/stop) controls them live.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "tasks": {"type": "array", "minItems": 1, "items": {
+                        "type": "object",
+                        "properties": {
+                            "goal": {"type": "string", "description": "What this subagent should accomplish. Be specific and self-contained — it knows nothing about your conversation history."},
+                            "context": {"type": "string", "description": "Background THIS child needs: file paths, error messages, constraints. Repeat shared background in every task that needs it."}
+                        },
+                        "required": ["goal"]
+                    }, "description": "The task(s); each entry spawns one subagent with isolated context and terminal session. Required when spawning."},
+                    "action": {"type": "string", "enum": ["spawn", "list", "steer", "stop"], "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status; 'steer' = queue course-correction text into one child; 'stop' = end one child early (partial result still returns)."},
+                    "subagent_id": {"type": "string", "description": "Target for action='steer'/'stop' (ids from the spawn response or action='list')."},
+                    "message": {"type": "string", "description": "For action='steer': the course correction, appended to the child's next tool result mid-run. Be directive and specific."}
+                },
+                "required": []
+            }),
+        },
+        ToolSpec {
+            name: "skill_manage".into(),
+            description: "Create, update, or delete skills — your procedural memory for recurring task types. The call is an operations array (a single edit is a list of one); it applies atomically — any failure rolls every touched skill back. Ops: create (full SKILL.md; lands in the profile's skills directory; must precede that skill's other ops), patch (targeted old_string/new_string fix — preferred; content alone REPLACES the whole file, read it via skill_view first), write_file/remove_file (supporting files), delete (sole op only). Existing skills are modified wherever they live.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "operations": {"type": "array", "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "action": {"type": "string", "enum": ["create", "patch", "write_file", "remove_file", "delete"]},
+                            "content": {"type": "string"},
+                            "category": {"type": "string"},
+                            "file_path": {"type": "string"},
+                            "file_content": {"type": "string"},
+                            "old_string": {"type": "string"},
+                            "new_string": {"type": "string"},
+                            "replace_all": {"type": "boolean", "default": false},
+                            "absorbed_into": {"type": "string"}
+                        },
+                        "required": ["name", "action"]
+                    }, "description": "Ordered ops; each names its target skill (lowercase, hyphens/underscores, max 64 chars)."}
+                },
+                "required": ["operations"]
+            }),
+        },
     ]
 }
 
@@ -329,7 +448,7 @@ mod tests {
     #[tokio::test]
     async fn dispatches_by_name() {
         let reg = ToolRegistry::new();
-        assert_eq!(reg.specs().len(), 15);
+        assert_eq!(reg.specs().len(), 21);
 
         let out = reg.dispatch("read_file", &json!({"path": "nonexistent-xyz"})).await;
         assert!(out.contains("error"));

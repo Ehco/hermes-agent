@@ -68,6 +68,12 @@ async fn run_async(args: &Value) -> Result<String, String> {
         .filter(|c| !c.is_empty())
         .ok_or_else(|| "terminal: 'command' is required".to_string())?;
     let cwd = args.get("cwd").and_then(Value::as_str).map(PathBuf::from);
+    // `background: true` hands the process to the process registry: the call
+    // returns a session_id at once and the process_manage actions own it
+    // from there (Python's terminal_tool_background path).
+    if args.get("background").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(crate::process_manage::spawn_background(command, args.get("cwd").and_then(Value::as_str)));
+    }
     let timeout_secs = args
         .get("timeout")
         .and_then(Value::as_u64)
@@ -101,15 +107,16 @@ async fn run_async(args: &Value) -> Result<String, String> {
     }
 }
 
+/// The shell wrapper shared by the foreground and background terminal paths.
 #[cfg(windows)]
-fn shell_command(command: &str) -> Command {
+pub(crate) fn shell_command(command: &str) -> Command {
     let mut cmd = Command::new("cmd");
     cmd.raw_arg("/C").raw_arg(command);
     cmd
 }
 
 #[cfg(not(windows))]
-fn shell_command(command: &str) -> Command {
+pub(crate) fn shell_command(command: &str) -> Command {
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command);
     cmd
