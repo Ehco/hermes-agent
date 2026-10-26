@@ -3,17 +3,22 @@
 //! `kanban_db_graph.initial_task_state`, `kanban_workflow`) from the Python
 //! hermes-agent.
 //!
-//! STORAGE FORMAT DEVIATION (documented): the Python board is a SQLite
-//! database (`kanban.db`) with tables `tasks`, `task_links`, `task_runs`,
-//! `task_comments`, `task_events`, `task_attachments`. The Rust workspace has
-//! no SQLite dependency available offline, so this port persists ONE JSON
-//! document (`board.json`) whose objects carry the Python COLUMN NAMES
-//! verbatim, so a board round-trips through this layer and the record shapes
-//! match the Python row shapes field-for-field. The resolution chain is the
-//! Python one: explicit `board` slug → `HERMES_KANBAN_DB` (a file path) →
-//! `HERMES_KANBAN_BOARD` (a slug) → the `default` board under
-//! `$HERMES_HOME/kanban/boards/<slug>/board.json` (`$HERMES_HOME` else
-//! `~/.hermes`).
+//! STORAGE: the Python board is a SQLite database (`kanban.db`) with tables
+//! `tasks`, `task_links`, `task_runs`, `task_comments`, `task_events`,
+//! `task_attachments`, `kanban_notify_subs`; this port now uses the SAME
+//! schema (see `kanban_sqlite::SCHEMA_SQL`, the Python `SCHEMA_SQL`
+//! verbatim) via rusqlite's bundled SQLite, so a board created by the Python
+//! opens here and vice versa. The resolution chain is the Python
+//! `kanban_db_path` one: explicit `board` slug → `HERMES_KANBAN_DB` (a file
+//! path) → `HERMES_KANBAN_BOARD` (a slug) → `default` (whose DB lives at
+//! `$HERMES_HOME/kanban.db`, other boards at
+//! `$HERMES_HOME/kanban/boards/<slug>/kanban.db`; `$HERMES_HOME` else
+//! `~/.hermes`). The record structs carry the Python COLUMN NAMES verbatim,
+//! so a board round-trips through this layer and the record shapes match the
+//! Python row shapes field-for-field. The whole board is loaded into memory
+//! and rewritten in one `BEGIN IMMEDIATE` transaction per save (the Python
+//! `write_txn` boundary); the in-memory CAS guards below then see committed
+//! state exactly like the Python's in-transaction CAS.
 //!
 //! Transition semantics ported faithfully:
 //! - statuses: triage/todo/scheduled/ready/running/blocked/review/done(+archived)
@@ -174,6 +179,15 @@ pub struct Task {
     pub worker_started_at: Option<i64>,
     #[serde(default)]
     pub last_heartbeat_at: Option<i64>,
+    // Later-added Python columns (read as NULL when absent from a row).
+    #[serde(default)]
+    pub workflow_template_id: Option<String>,
+    #[serde(default)]
+    pub current_step_key: Option<String>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub max_retries: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -200,6 +214,17 @@ pub struct Run {
     pub claim_expires: Option<i64>,
     #[serde(default)]
     pub last_heartbeat_at: Option<i64>,
+    // Later-added Python columns (read as NULL when absent from a row).
+    #[serde(default)]
+    pub step_key: Option<String>,
+    #[serde(default)]
+    pub claim_lock: Option<String>,
+    #[serde(default)]
+    pub worker_pid: Option<i64>,
+    #[serde(default)]
+    pub worker_started_at: Option<i64>,
+    #[serde(default)]
+    pub max_runtime_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -326,10 +351,13 @@ pub fn hermes_home() -> PathBuf {
 }
 
 /// Python `kanban_db.kanban_db_path(board)`: where this port stores a board.
+/// `HERMES_KANBAN_DB` pins the DB file; `default` lives at
+/// `$HERMES_HOME/kanban.db` (back-compat), other boards at
+/// `$HERMES_HOME/kanban/boards/<slug>/kanban.db`.
 pub fn board_file_path(board: Option<&str>) -> Result<PathBuf, KbError> {
     if let Ok(db) = std::env::var("HERMES_KANBAN_DB") {
         if !db.trim().is_empty() {
-            // An explicit env path IS the board file (Python: the sqlite file).
+            // An explicit env path IS the board DB file (Python: the sqlite file).
             return Ok(PathBuf::from(db));
         }
     }
@@ -340,11 +368,14 @@ pub fn board_file_path(board: Option<&str>) -> Result<PathBuf, KbError> {
     } else {
         DEFAULT_BOARD.to_string()
     };
+    if slug == DEFAULT_BOARD {
+        return Ok(hermes_home().join("kanban.db"));
+    }
     Ok(hermes_home()
         .join("kanban")
         .join("boards")
         .join(slug)
-        .join("board.json"))
+        .join("kanban.db"))
 }
 
 fn now() -> i64 {
@@ -367,38 +398,84 @@ fn new_task_id() -> String {
     format!("t_{:08x}", (mixed & 0xffff_ffff) as u32)
 }
 
-/// A board loaded from (and persisted back to) its `board.json`.
+/// A board loaded from (and persisted back to) its SQLite `kanban.db`.
 pub struct Board {
     pub path: PathBuf,
     pub file: BoardFile,
+    /// Open DB handle for this board file (WAL + busy timeout, Python
+    /// `_sqlite_connect`); the schema is initialized and rows are loaded.
+    conn: rusqlite::Connection,
 }
 
 impl Board {
     pub fn load(path: PathBuf) -> std::io::Result<Self> {
-        let file = match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice::<BoardFile>(&bytes).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("corrupt board {}: {e}", path.display()),
-                )
-            })?,
-            Err(_) => BoardFile {
-                schema: 1,
-                ..Default::default()
-            },
-        };
-        Ok(Board { path, file })
-    }
-
-    /// Atomic persist (temp file + rename), as SQLite's commit atomicity.
-    pub fn save(&self) -> std::io::Result<()> {
-        if let Some(parent) = self.path.parent() {
+        if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec(&self.file).unwrap())?;
-        std::fs::rename(&tmp, &self.path)?;
-        Ok(())
+        // A non-empty existing file wins; a missing/zero-byte DB may still be
+        // seeded from a legacy JSON board document (the previous dev format).
+        let legacy = Self::legacy_board_document(&path);
+        let conn = crate::kanban_sqlite::open_connection(&path)?;
+        crate::kanban_sqlite::init_schema(&conn)?;
+        let file = match legacy {
+            Some(file) => file,
+            None => crate::kanban_sqlite::load_board_file(&conn)?,
+        };
+        Ok(Board { path, file, conn })
+    }
+
+    /// The previous dev storage format: ONE JSON document (`board.json`)
+    /// carrying the same records. Only consulted when the SQLite file is
+    /// missing or zero-byte; once a real DB exists it is authoritative.
+    fn legacy_board_document(path: &Path) -> Option<BoardFile> {
+        let live = std::fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false);
+        if live {
+            return None;
+        }
+        let parent = path.parent()?;
+        let mut candidates = vec![parent.join("board.json")];
+        if path.file_name().and_then(|n| n.to_str()) == Some("kanban.db") {
+            // The default board's DB moved to <home>/kanban.db; its legacy
+            // JSON sat at <home>/kanban/boards/default/board.json.
+            candidates.push(
+                parent
+                    .join("kanban")
+                    .join("boards")
+                    .join(DEFAULT_BOARD)
+                    .join("board.json"),
+            );
+        }
+        for candidate in candidates {
+            if let Ok(bytes) = std::fs::read(&candidate) {
+                if let Ok(file) = serde_json::from_slice::<BoardFile>(&bytes) {
+                    return Some(file);
+                }
+            }
+        }
+        None
+    }
+
+    /// One `BEGIN IMMEDIATE` … `COMMIT` (Python `write_txn`): the whole board
+    /// document is rewritten inside a single write transaction, so a save
+    /// either lands wholly or not at all and concurrent writers serialize.
+    pub fn save(&self) -> std::io::Result<()> {
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(crate::kanban_sqlite::io_err)?;
+        match crate::kanban_sqlite::write_board_file(&self.conn, &self.file) {
+            Ok(()) => self
+                .conn
+                .execute_batch("COMMIT")
+                .map_err(crate::kanban_sqlite::io_err)
+                .or_else(|e| {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    Err(e)
+                }),
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
     }
 
     // --- Row accessors ---
@@ -582,6 +659,7 @@ impl Board {
             ended_at: Some(now()),
             claim_expires: None,
             last_heartbeat_at: None,
+            ..Default::default()
         });
         id
     }
@@ -1563,13 +1641,20 @@ impl Board {
         Ok(id)
     }
 
-    /// Python `task_attachments_dir`.
+    /// Python `task_attachments_dir` / `attachments_root`: the default board
+    /// keeps the legacy `<home>/kanban/attachments/`; named boards use
+    /// `<board_dir>/attachments/`.
     pub fn attachments_dir(&self, task_id: &str) -> PathBuf {
-        self.path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("attachments")
-            .join(task_id)
+        let parent = self.path.parent().unwrap_or(Path::new("."));
+        // Default board DB = <home>/kanban.db → <home>/kanban/attachments.
+        let root = if self.path.file_name().and_then(|n| n.to_str()) == Some("kanban.db")
+            && parent == hermes_home()
+        {
+            parent.join("kanban")
+        } else {
+            parent.to_path_buf()
+        };
+        root.join("attachments").join(task_id)
     }
 
     /// Python `heartbeat_claim` (kanban_db): extend the running claim.

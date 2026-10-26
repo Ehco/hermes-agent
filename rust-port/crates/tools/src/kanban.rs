@@ -1838,7 +1838,8 @@ pub(crate) mod tests {
         }
 
         fn board_path(&self) -> PathBuf {
-            self.home.join("kanban/boards/default/board.json")
+            // Python kanban_db_path: the default board's DB at <home>/kanban.db.
+            self.home.join("kanban.db")
         }
 
         fn board(&self) -> Board {
@@ -2273,5 +2274,302 @@ pub(crate) mod tests {
                 assert!(props.contains_key(r), "{name}: required {r} not declared");
             }
         }
+    }
+
+    // --- SQLite storage / Python interchange -------------------------------
+
+    /// Python `hermes_cli/kanban_db.py` SCHEMA_SQL — VERBATIM copy of the
+    /// contract source (schema-parity fixture). If the Python drifts, update
+    /// this and `kanban_sqlite::SCHEMA_SQL` together.
+    const PYTHON_SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS tasks (
+    id                   TEXT PRIMARY KEY,
+    title                TEXT NOT NULL,
+    body                 TEXT,
+    assignee             TEXT,
+    status               TEXT NOT NULL,
+    priority             INTEGER DEFAULT 0,
+    created_by           TEXT,
+    created_at           INTEGER NOT NULL,
+    started_at           INTEGER,
+    completed_at         INTEGER,
+    workspace_kind       TEXT NOT NULL DEFAULT 'scratch',
+    workspace_path       TEXT,
+    branch_name          TEXT,
+    project_id           TEXT,
+    claim_lock           TEXT,
+    claim_expires        INTEGER,
+    tenant               TEXT,
+    result               TEXT,
+    idempotency_key      TEXT,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    worker_pid           INTEGER,
+    worker_started_at    INTEGER,
+    last_failure_error   TEXT,
+    max_runtime_seconds  INTEGER,
+    last_heartbeat_at    INTEGER,
+    current_run_id       INTEGER,
+    workflow_template_id TEXT,
+    current_step_key     TEXT,
+    skills               TEXT,
+    model_override       TEXT,
+    provider_override    TEXT,
+    reasoning_effort     TEXT,
+    max_retries          INTEGER,
+    goal_mode            INTEGER NOT NULL DEFAULT 0,
+    goal_max_turns       INTEGER,
+    session_id           TEXT,
+    block_kind           TEXT,
+    block_recurrences    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS task_links (
+    parent_id  TEXT NOT NULL,
+    child_id   TEXT NOT NULL,
+    PRIMARY KEY (parent_id, child_id)
+);
+
+CREATE TABLE IF NOT EXISTS task_comments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id    TEXT NOT NULL,
+    author     TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id    TEXT NOT NULL,
+    run_id     INTEGER,
+    kind       TEXT NOT NULL,
+    payload    TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_runs (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id             TEXT NOT NULL,
+    profile             TEXT,
+    step_key            TEXT,
+    status              TEXT NOT NULL,
+    claim_lock          TEXT,
+    claim_expires       INTEGER,
+    worker_pid          INTEGER,
+    worker_started_at   INTEGER,
+    max_runtime_seconds INTEGER,
+    last_heartbeat_at   INTEGER,
+    started_at          INTEGER NOT NULL,
+    ended_at            INTEGER,
+    outcome             TEXT,
+    summary             TEXT,
+    metadata            TEXT,
+    error               TEXT
+);
+
+CREATE TABLE IF NOT EXISTS task_attachments (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id      TEXT NOT NULL,
+    filename     TEXT NOT NULL,
+    stored_path  TEXT NOT NULL,
+    content_type TEXT,
+    size         INTEGER NOT NULL DEFAULT 0,
+    uploaded_by  TEXT,
+    created_at   INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS kanban_notify_subs (
+    task_id       TEXT NOT NULL,
+    platform      TEXT NOT NULL,
+    chat_id       TEXT NOT NULL,
+    thread_id     TEXT NOT NULL DEFAULT '',
+    user_id       TEXT,
+    user_id_alt   TEXT,
+    chat_type     TEXT,
+    notifier_profile TEXT,
+    delivery_mode TEXT NOT NULL DEFAULT 'notify',
+    delivery_metadata TEXT,
+    created_at    INTEGER NOT NULL,
+    last_event_id INTEGER NOT NULL DEFAULT 0,
+    last_ping_event_id INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (task_id, platform, chat_id, thread_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status          ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_links_child           ON task_links(child_id);
+CREATE INDEX IF NOT EXISTS idx_links_parent          ON task_links(parent_id);
+CREATE INDEX IF NOT EXISTS idx_comments_task         ON task_comments(task_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_events_task           ON task_events(task_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_runs_task             ON task_runs(task_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_runs_status           ON task_runs(status);
+CREATE INDEX IF NOT EXISTS idx_attachments_task      ON task_attachments(task_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_notify_task           ON kanban_notify_subs(task_id);
+
+-- Python `_migrate_add_optional_columns` adds these on every real connect.
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks(assignee, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_tenant          ON tasks(tenant);
+CREATE INDEX IF NOT EXISTS idx_tasks_idempotency     ON tasks(idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_tasks_session_id      ON tasks(session_id);
+CREATE INDEX IF NOT EXISTS idx_events_run            ON task_events(run_id, id);
+"#;
+
+    /// One normalized SQL statement per `CREATE TABLE/INDEX`, comments and
+    /// whitespace removed — so a comment-only edit never masks real drift.
+    /// Comments are stripped BEFORE splitting on `;` (comment text may hold
+    /// semicolons).
+    fn normalized_schema(sql: &str) -> std::collections::BTreeSet<String> {
+        let stripped: String = sql
+            .lines()
+            .map(|line| {
+                // Remove a comment to end-of-line; a line may be comment-only.
+                let cut = line.find("--").unwrap_or(line.len());
+                format!("{} ", &line[..cut])
+            })
+            .collect();
+        let mut out = std::collections::BTreeSet::new();
+        for statement in stripped.split(';') {
+            let normalized =
+                statement.split_whitespace().collect::<Vec<_>>().join(" ");
+            if normalized.starts_with("CREATE") {
+                out.insert(normalized);
+            }
+        }
+        out
+    }
+
+    /// A DB created by the PYTHON's CREATE TABLE statements opens here, and a
+    /// DB created by the Rust port carries the same schema objects.
+    #[test]
+    fn schema_parity_with_python() {
+        assert_eq!(
+            normalized_schema(crate::kanban_sqlite::SCHEMA_SQL),
+            normalized_schema(PYTHON_SCHEMA_SQL),
+            "Rust SCHEMA_SQL drifted from the Python kanban_db.SCHEMA_SQL"
+        );
+    }
+
+    /// Interchange: a board file created with the Python schema + Python-style
+    /// INSERTs opens in the Rust port, mutates, and the Rust writes stay
+    /// visible through raw SQL (and back to a fresh Python-shaped read).
+    #[test]
+    fn python_created_board_opens_and_round_trips() {
+        let env = Env::fresh();
+        let db_path = env.board_path();
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(PYTHON_SCHEMA_SQL).unwrap();
+            // Python `_migrate_add_optional_columns` adds this column on every
+            // real connect (the v1 CREATE TABLE predates it).
+            conn.execute("ALTER TABLE tasks ADD COLUMN completion_contract TEXT", [])
+                .unwrap();
+            conn.execute(
+                "INSERT INTO tasks (
+                    id, title, body, assignee, status, priority, created_by, created_at,
+                    workspace_kind, skills, goal_mode, consecutive_failures, block_recurrences
+                ) VALUES ('t_ab12cd34', 'From Python', NULL, 'dev', 'ready', 3, 'orchestrator',
+                          1700000000, 'scratch', '[\"github-code-review\"]', 0, 0, 0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO task_events (id, task_id, run_id, kind, payload, created_at)
+                 VALUES (1, 't_ab12cd34', NULL, 'created', '{\"status\":\"ready\"}', 1700000000)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO task_runs (id, task_id, profile, status, started_at)
+                 VALUES (1, 't_ab12cd34', 'dev', 'running', 1700000000)",
+                [],
+            )
+            .unwrap();
+        }
+        // Open with the Rust layer: the Python-created rows are visible with
+        // the exact column semantics (epoch ints, JSON skills array, defaults).
+        let board = Board::load(db_path.clone()).unwrap();
+        let task = board.get_task("t_ab12cd34").unwrap();
+        assert_eq!(task.title, "From Python");
+        assert_eq!(task.priority, 3);
+        assert_eq!(task.created_at, Some(1_700_000_000));
+        assert_eq!(task.skills.as_deref(), Some(&["github-code-review".to_string()][..]));
+        assert_eq!(task.goal_mode, false);
+        // Counters continue from the Python rows (AUTOINCREMENT parity).
+        assert_eq!(board.file.counters.event, 1);
+        assert_eq!(board.file.counters.run, 1);
+        // Mutate through the tool surface: put the card in a running claim,
+        // then complete it with the run-ownership proof.
+        env.task_running("t_ab12cd34", 2);
+        Env::set("HERMES_KANBAN_TASK", "t_ab12cd34");
+        Env::set("HERMES_KANBAN_RUN_ID", "2");
+        let out = execute(
+            "kanban_complete",
+            &json!({ "summary": "finished the Python-created card" }),
+        );
+        assert_eq!(parse(&out)["ok"], true, "{out}");
+        Env::remove("HERMES_KANBAN_TASK");
+        Env::remove("HERMES_KANBAN_RUN_ID");
+        // Reopen: done status + the completed run + the event survived, and
+        // the SQLite row is readable by RAW SQL with Python column semantics.
+        let board = Board::load(db_path).unwrap();
+        assert_eq!(board.get_task("t_ab12cd34").unwrap().status, "done");
+        assert_eq!(board.list_runs("t_ab12cd34").len(), 2);
+        let conn = rusqlite::Connection::open(board.path).unwrap();
+        let (status, completed_at_is_set): (String, i64) = conn
+            .query_row(
+                "SELECT status, completed_at IS NOT NULL FROM tasks WHERE id = 't_ab12cd34'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "done");
+        assert_eq!(completed_at_is_set, 1);
+        let kinds: Vec<String> = conn
+            .prepare("SELECT kind FROM task_events WHERE task_id = 't_ab12cd34' ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(kinds, ["created", "completed"]);
+    }
+
+    /// Claim/heartbeat fencing (Python CAS on `tasks.status`/`claim_lock`):
+    /// a stale or wrong lock never extends a claim, a matching one does and
+    /// mirrors onto the active run; a completion with a mismatched run id
+    /// loses the CAS.
+    #[test]
+    fn claim_heartbeat_fencing() {
+        let env = Env::fresh();
+        let tid = parse(&execute("kanban_create", &json!({ "title": "W", "assignee": "dev" })))
+            ["task_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        env.task_running(&tid, 7); // running, claim_lock = "host:1"
+        let mut board = env.board();
+        // Wrong lock: the CAS updates zero rows.
+        assert!(!board.heartbeat_claim(&tid, None, Some("host:999")));
+        // Right lock: extended, and mirrored onto the active run row.
+        assert!(board.heartbeat_claim(&tid, Some(60), Some("host:1")));
+        let task = board.get_task(&tid).unwrap();
+        assert!(task.claim_expires.is_some());
+        let run = board.file.runs.iter().find(|r| r.id == 7).unwrap();
+        assert_eq!(run.claim_expires, task.claim_expires);
+        drop(board);
+        // Completion CAS: wrong run id loses (refusal), right run id wins.
+        Env::set("HERMES_KANBAN_TASK", &tid);
+        let out = execute(
+            "kanban_complete",
+            &json!({ "task_id": &tid, "summary": "s" }),
+        );
+        assert!(
+            out.contains("kanban_complete refused: this worker cannot resolve its"),
+            "{out}"
+        );
+        Env::set("HERMES_KANBAN_RUN_ID", "7");
+        let out = execute("kanban_complete", &json!({ "task_id": &tid, "summary": "s" }));
+        assert_eq!(parse(&out)["ok"], true, "{out}");
+        // The CAS closed the run: a second completion cannot win again.
+        let out = execute("kanban_complete", &json!({ "task_id": &tid, "summary": "again" }));
+        assert!(out.contains("could not complete"), "{out}");
     }
 }

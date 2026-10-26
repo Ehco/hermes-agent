@@ -21,6 +21,7 @@ hermes-skills = { path = "../skills" }
 hermes-schedulers = { path = "../schedulers" }
 # Kanban tools: inline base64 attachment decoding.
 base64 = "0.22"
+rusqlite = { version = "0.41.0", features = ["bundled"] }
 
 [dev-dependencies]
 # Board-state round-trip tests run in an isolated HERMES_HOME tempdir.
