@@ -7,15 +7,20 @@
 //! the cli `ToolHost` can treat results opaquely.
 
 pub mod annotate_preview;
+pub mod browser;
 pub mod clarify;
+pub mod close_terminal;
+pub mod computer_use;
 pub mod cronjob;
 pub mod delegate_task;
 pub mod desktop_bridge;
 pub mod desktop_preview;
 pub mod desktop_project;
+pub mod discord;
 pub mod drive_preview;
 pub mod edit;
 pub mod execute_code;
+pub mod feishu;
 pub mod focus_pane;
 pub mod gui_tour;
 pub mod html_text;
@@ -36,6 +41,7 @@ pub mod search;
 pub mod send_message;
 pub mod session_search;
 pub mod set_theme;
+pub mod setup_beat;
 pub mod show_tip;
 pub mod skills;
 pub mod terminal;
@@ -44,11 +50,14 @@ pub mod tool_search;
 pub mod tts;
 pub mod util;
 pub mod video_generate;
+pub mod vision;
 pub mod web_common;
 pub mod web_extract;
 pub mod web_search;
 pub mod write_file;
 pub mod x_search;
+pub mod xai_video;
+pub mod yuanbao;
 
 /// Re-exported for convenience; the registry owns the ToolSpec list.
 pub use hermes_core::model::ToolSpec;

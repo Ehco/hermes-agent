@@ -11,12 +11,13 @@ use serde_json::Value;
 use hermes_core::model::ToolSpec;
 
 use crate::{
-    annotate_preview, clarify, cronjob, delegate_task, desktop_preview, desktop_project,
-    drive_preview, edit, execute_code, focus_pane, gui_tour, image_generate, list_dir,
-    manage_catalog, manage_connections, maps, memory, process_manage, react_to_message, read_file,
-    read_terminal, read_window_below, search, send_message, session_search, set_theme, show_tip,
-    skills, terminal, todo_list, tool_search, tts, util, video_generate, web_extract, web_search,
-    write_file, x_search,
+    annotate_preview, browser, clarify, close_terminal, computer_use, cronjob, delegate_task,
+    desktop_preview, desktop_project, discord, drive_preview, edit, execute_code, feishu,
+    focus_pane, gui_tour, image_generate, list_dir, manage_catalog, manage_connections, maps,
+    memory, process_manage, react_to_message, read_file, read_terminal, read_window_below, search,
+    send_message, session_search, set_theme, setup_beat, show_tip, skills, terminal, todo_list,
+    tool_search, tts, util, video_generate, vision, web_extract, web_search, write_file, x_search,
+    xai_video, yuanbao,
 };
 
 pub struct ToolRegistry {
@@ -134,6 +135,44 @@ pub fn execute_sync(name: &str, args: &Value) -> String {
         "manage_catalog" => manage_catalog::execute(args),
         // Guided tour (highlight + narrate) round-trips the desktop bridge.
         "gui_tour" => gui_tour::execute(args),
+        // --- Batch 7 ---
+        // Multimodal analysis through the auxiliary vision LLM seam.
+        "vision_analyze" => vision::execute_vision(args),
+        "video_analyze" => vision::execute_video(args),
+        // xAI Imagine video edit/extend (provider-gated like video_generate).
+        "xai_video_edit" => xai_video::execute_edit(args),
+        "xai_video_extend" => xai_video::execute_extend(args),
+        // Feishu/Lark document + comment tools (client-injected seam).
+        "feishu_doc_read" => feishu::execute_doc_read(args),
+        "feishu_drive_list_comments" => feishu::execute_list_comments(args),
+        "feishu_drive_list_comment_replies" => feishu::execute_list_replies(args),
+        "feishu_drive_reply_comment" => feishu::execute_reply_comment(args),
+        "feishu_drive_add_comment" => feishu::execute_add_comment(args),
+        // Universal desktop control (cua-driver): backend-unavailable degradation.
+        "computer_use" => computer_use::execute(args),
+        // Hide a background process's terminal tab (desktop-bridge pattern).
+        "close_terminal" => close_terminal::execute(args),
+        // First-run onboarding: beat validation then the no-record degradation.
+        "setup_beat" => setup_beat::execute(args),
+        // The browser toolset: browser_exec CLI bridge, the login vault, raw
+        // CDP, native dialogs, and the granular page tools — all validated
+        // here, then degraded without a live browser session.
+        "browser_exec" => browser::execute_exec(args),
+        "browser_vault" => browser::execute_vault(args),
+        "browser_cdp" => browser::execute_cdp(args),
+        "browser_dialog" => browser::execute_dialog(args),
+        name @ ("browser_navigate" | "browser_snapshot" | "browser_click" | "browser_type"
+        | "browser_press" | "browser_scroll" | "browser_back" | "browser_console"
+        | "browser_get_images" | "browser_vision") => browser::execute_granular(name, args),
+        // Discord participation + server management (token-gated).
+        "discord" => discord::execute(args),
+        "discord_admin" => discord::execute_admin(args),
+        // Yuanbao platform tools (adapter-injected).
+        "yb_query_group_info" => yuanbao::execute_query_group_info(args),
+        "yb_query_group_members" => yuanbao::execute_query_group_members(args),
+        "yb_search_sticker" => yuanbao::execute_search_sticker(args),
+        "yb_send_dm" => yuanbao::execute_send("yb_send_dm", args),
+        "yb_send_sticker" => yuanbao::execute_send("yb_send_sticker", args),
         other => util::tool_error(format!("Unknown tool: {other}")),
     }
 }
@@ -775,6 +814,452 @@ pub fn specs() -> Vec<ToolSpec> {
                 "required": ["action"]
             }),
         },
+        // --- Batch 7: vision/video analysis, xAI video, Feishu, computer_use,
+        // close_terminal, setup_beat, the browser toolset, Discord, Yuanbao.
+        ToolSpec {
+            name: "vision_analyze".into(),
+            description: "Load an image into the conversation so you can see it. Call it any time the user references an image — then answer from what you see.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "image_url": {"type": "string", "description": "Image URL (http/https), local file path, or data: URL to load."},
+                    "question": {"type": "string", "description": "Your question or request about the image."},
+                    "region": {"type": "array", "items": {"type": "integer"}, "minItems": 4, "maxItems": 4, "description": "Optional [x1, y1, x2, y2] crop in ORIGINAL-image pixel coordinates, applied before any downscaling — the crop keeps full resolution. Load the full image first, then re-call with a region to zoom into small text or fine detail."}
+                },
+                "required": ["image_url", "question"]
+            }),
+        },
+        ToolSpec {
+            name: "video_analyze".into(),
+            description: "Analyze a video from a URL or local file path using a multimodal AI model. Sends the video to a video-capable model (e.g. Gemini) for understanding. Use this for video files — for images, use vision_analyze instead. Supports mp4, webm, mov, avi, mkv, mpeg formats. Note: large videos (>20 MB) may be slow; max ~50 MB.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "video_url": {"type": "string", "description": "Video URL (http/https) or local file path to analyze."},
+                    "question": {"type": "string", "description": "Your specific question about the video. The AI will describe what happens in the video and answer your question."}
+                },
+                "required": ["video_url", "question"]
+            }),
+        },
+        ToolSpec {
+            name: "xai_video_edit".into(),
+            description: "Edit an existing video with xAI Imagine. This is separate from `video_generate` because video editing is provider-specific. `video_url` must be the public HTTPS MP4 URL from a prior Imagine result (`video` or `public_url` on files-cdn).".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Instruction for how xAI should modify the source video."},
+                    "video_url": {"type": "string", "description": "Public HTTPS MP4 URL of the source video — the `video` or `public_url` from a prior xAI Imagine result."}
+                },
+                "required": ["prompt", "video_url"]
+            }),
+        },
+        ToolSpec {
+            name: "xai_video_extend".into(),
+            description: "Extend an existing video with xAI Imagine. This is separate from `video_generate` because video extension is provider-specific. `video_url` must be the public HTTPS MP4 URL from a prior Imagine result (`video` or `public_url` on files-cdn).".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Instruction for how xAI should continue the source video."},
+                    "video_url": {"type": "string", "description": "Public HTTPS MP4 URL of the source video — the `video` or `public_url` from a prior xAI Imagine result."},
+                    "duration": {"type": "integer", "description": "Desired extension duration in seconds. xAI clamps this to its supported range."}
+                },
+                "required": ["prompt", "video_url"]
+            }),
+        },
+        ToolSpec {
+            name: "feishu_doc_read".into(),
+            description: "Read the full content of a Feishu/Lark document as plain text. Useful when you need more context beyond the quoted text in a comment.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "doc_token": {"type": "string", "description": "The document token (from the document URL or comment context)."}
+                },
+                "required": ["doc_token"]
+            }),
+        },
+        ToolSpec {
+            name: "feishu_drive_list_comments".into(),
+            description: "List comments on a Feishu document. Use is_whole=true to list whole-document comments only.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "file_token": {"type": "string", "description": "The document file token."},
+                    "file_type": {"type": "string", "description": "File type (default: docx).", "default": "docx"},
+                    "is_whole": {"type": "boolean", "description": "If true, only return whole-document comments.", "default": false},
+                    "page_size": {"type": "integer", "description": "Number of comments per page (max 100).", "default": 100},
+                    "page_token": {"type": "string", "description": "Pagination token for next page."}
+                },
+                "required": ["file_token"]
+            }),
+        },
+        ToolSpec {
+            name: "feishu_drive_list_comment_replies".into(),
+            description: "List all replies in a comment thread on a Feishu document.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "file_token": {"type": "string", "description": "The document file token."},
+                    "comment_id": {"type": "string", "description": "The comment ID to list replies for."},
+                    "file_type": {"type": "string", "description": "File type (default: docx).", "default": "docx"},
+                    "page_size": {"type": "integer", "description": "Number of replies per page (max 100).", "default": 100},
+                    "page_token": {"type": "string", "description": "Pagination token for next page."}
+                },
+                "required": ["file_token", "comment_id"]
+            }),
+        },
+        ToolSpec {
+            name: "feishu_drive_reply_comment".into(),
+            description: "Reply to a local comment thread on a Feishu document. Use this for local (quoted-text) comments. For whole-document comments, use feishu_drive_add_comment instead.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "file_token": {"type": "string", "description": "The document file token."},
+                    "comment_id": {"type": "string", "description": "The comment ID to reply to."},
+                    "content": {"type": "string", "description": "The reply text content (plain text only, no markdown)."},
+                    "file_type": {"type": "string", "description": "File type (default: docx).", "default": "docx"}
+                },
+                "required": ["file_token", "comment_id", "content"]
+            }),
+        },
+        ToolSpec {
+            name: "feishu_drive_add_comment".into(),
+            description: "Add a new whole-document comment on a Feishu document. Use this for whole-document comments or as a fallback when reply_comment fails with code 1069302.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "file_token": {"type": "string", "description": "The document file token."},
+                    "content": {"type": "string", "description": "The comment text content (plain text only, no markdown)."},
+                    "file_type": {"type": "string", "description": "File type (default: docx).", "default": "docx"}
+                },
+                "required": ["file_token", "content"]
+            }),
+        },
+        ToolSpec {
+            name: "computer_use".into(),
+            description: "Drive the desktop via cua-driver — screenshots, mouse, keyboard, scroll, drag — on macOS, Windows, and Linux. Input is background-FIRST, not background-only: the default delivery routes to the target window without stealing the user's cursor or focus (works even on hidden/minimized windows), and when a result's `verdict` says to escalate you climb — pixel coordinates, or delivery_mode='foreground' (briefly fronts the window; separate approval). Each result carries a `verdict` with the next step; follow it — never repeat confirmed input, and re-capture to verify an unverifiable one before retrying. Workflow: action='capture' (mode='som' gives numbered element overlays), then click by `element` index; re-capture after state-changing actions (or pass capture_after=true). Image captures include a shareable `screenshot_path`; deliver it via the platform's MEDIA syntax when the user asks to see it — not for captures used only for control.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["capture", "click", "double_click", "right_click", "middle_click", "drag", "scroll", "type", "key", "set_value", "wait", "list_apps", "list_windows", "focus_app"], "description": "Which action to perform. `capture` is free (no side effects). All other actions require approval unless auto-approved. Use `set_value` for select/popup elements and sliders — it selects the matching option directly without opening the native menu (no focus steal)."},
+                    "mode": {"type": "string", "enum": ["som", "vision", "ax"], "description": "Capture mode. `som` (default) is a screenshot with numbered overlays on every interactable element plus the AX tree — best for vision models, lets you click by element index. `vision` is a plain screenshot. `ax` is the accessibility tree only (no image; useful for text-only models)."},
+                    "app": {"type": "string", "description": "Optional. Limit capture/action to one app (name e.g. 'Safari', or bundle ID). Omitted = frontmost window. app='screen' = composited full-screen grab (image only, no clickable elements); app='desktop' = the OS desktop/shell surface (wallpaper, icons, taskbar) with its elements."},
+                    "pid": {"type": "integer", "description": "Optional exact process target for action='capture'. Pair with window_id when discovery cannot resolve an X11 app."},
+                    "window_id": {"type": "integer", "description": "Optional exact native window target for action='capture'. Pair with pid when an external cua-driver list_windows lookup has already identified the window."},
+                    "element": {"type": "integer", "description": "The 1-based SOM index returned by the last capture(mode='som') call. Strongly preferred over raw coordinates."},
+                    "coordinate": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "Pixel coordinates [x, y] relative to the captured window screenshot (top-left origin). Only use this if no element index is available."},
+                    "button": {"type": "string", "enum": ["left", "right", "middle"], "description": "Mouse button. Defaults to left."},
+                    "modifiers": {"type": "array", "items": {"type": "string", "enum": ["cmd", "shift", "option", "alt", "ctrl", "fn", "win", "windows", "super", "meta"]}, "description": "Modifier keys held during the action."},
+                    "from_element": {"type": "integer", "description": "Source element index (drag)."},
+                    "to_element": {"type": "integer", "description": "Target element index (drag)."},
+                    "from_coordinate": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "Source [x,y] (drag; use when no element available)."},
+                    "to_coordinate": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "Target [x,y] (drag; use when no element available)."},
+                    "direction": {"type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction."},
+                    "amount": {"type": "integer", "description": "Scroll wheel ticks. Default 3."},
+                    "value": {"type": "string", "description": "For action='set_value': the value to set on the element. For AXPopUpButton / select dropdowns, pass the option's display label (e.g. 'Blue'). For sliders and other AXValue-settable elements, pass the numeric or string value."},
+                    "text": {"type": "string", "description": "Text to type (respects the current layout)."},
+                    "keys": {"type": "string", "description": "Key combo, e.g. 'cmd+s', 'ctrl+alt+t', 'return', 'escape', 'tab'. Use '+' to combine."},
+                    "seconds": {"type": "number", "description": "wait: seconds to pause (max 30)."},
+                    "raise_window": {"type": "boolean", "description": "Only for action='focus_app'. If true, brings the window to front (DISRUPTS the user). Default false — input is routed to the app without raising, matching the background co-work model."},
+                    "delivery_mode": {"type": "string", "enum": ["background", "foreground"], "description": "For input actions (click, type, key, drag, scroll). `background` (DEFAULT) delivers without raising the window or stealing focus. `foreground` briefly fronts the window then restores focus — a visible change needing its own approval; use it only when a result's verdict tells you to escalate there. Each result's `verdict` carries the next step; follow it rather than guessing."},
+                    "bring_to_front": {"type": "boolean", "description": "Optional and only valid with delivery_mode='foreground'. Explicitly invokes cua-driver's standalone bring_to_front tool before the input; it is never passed as an input property. This persistent focus change has a separate approval scope. Default false."},
+                    "capture_after": {"type": "boolean", "description": "If true, take a follow-up capture after the action and include it in the response. Saves a round-trip when you need to verify an action's effect."}
+                },
+                "required": ["action"]
+            }),
+        },
+        ToolSpec {
+            name: "close_terminal".into(),
+            description: "Hide a background process's terminal tab (process keeps running) in the Hermes desktop GUI (the tabs mirroring terminal(background=true) runs). This does NOT kill the process — it only drops the tab/view; the output keeps buffering and the user can reopen it from the status stack. Use it to tidy up when a background process's live terminal is no longer worth showing. To actually stop the process, use process(action='kill') instead.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "process_id": {"type": "string", "description": "The background process's session id (from terminal(background=true) output or process(action='list')) whose tab should be closed."}
+                },
+                "required": ["process_id"]
+            }),
+        },
+        ToolSpec {
+            name: "setup_beat".into(),
+            description: "Run the first-run onboarding in this chat. Shows the card for a beat and waits for the user, then returns their answer and what to do next. beat=next shows the next beat. Pass value to record an answer they gave in words, skip to record that they skipped a beat. The build card needs options: your picks from the list its reminder gives. beat=done ends onboarding after the first build is shown and its close card is answered. Nothing here ends it early: a user who wants to stop presses Skip setup.".into(),
+            schema: json!({
+                "type": "object",
+                "required": ["beat"],
+                "properties": {
+                    "beat": {"type": "string", "enum": ["next", "name", "theme", "layout", "connectors", "plugins", "tour", "build", "done"]},
+                    "question": {"type": "string", "description": "Your line above the card."},
+                    "value": {"type": "string", "description": "Record an answer given in words (a name, or an option id). No card."},
+                    "skip": {"type": "boolean", "description": "They skipped this beat in words. No card."},
+                    "suggest": {"type": "array", "items": {"type": "string"}, "description": "connectors only: slugs pinned as Suggested."},
+                    "options": {"type": "array", "maxItems": 4, "description": "build only: up to four picks, ids from the list.", "items": {"type": "object", "required": ["id", "label"], "properties": {"id": {"type": "string"}, "label": {"type": "string", "maxLength": 32}}}}
+                }
+            }),
+        },
+        ToolSpec {
+            name: "browser_exec".into(),
+            description: "Drive a real web browser via the Browser Use CLI: `code` runs as full Python (stdlib available) with pre-imported browser helpers; stdout comes back in the result. Start `code` with a one-line comment describing the step. STATE: the browser session and workspace persist across calls. Batch each sub-procedure (navigate, wait, extract, act) into one call. Work text-first: page_info() for state, js() for reading/extracting DOM text. Login walls: never guess credentials. Vault: on a login, checkout or 2FA form, call browser_vault through tool_call. Never type a password, card number, CVC or code with this tool. (The browser-use CLI is not installed yet. Install it with `hermes tools` (Browser Automation → Browser Use).)".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Python code to execute using the pre-imported browser helpers. Use print(...) for any data you need back."},
+                    "session": {"type": "string", "description": "Named isolated browser session — its own daemon and (on cloud backends) own browser, so concurrent tasks don't share tabs. Reuse the same name on every related call; omit for the shared default session."},
+                    "timeout_s": {"type": "integer", "default": 300, "description": "Max seconds to wait for the code to finish (default 300, max 1800)."},
+                    "local": {"type": "boolean", "default": false, "description": "Drive the user's own local browser (a Hermes-managed copy of their real default-Chromium profile, logins/cookies included) instead of the configured cloud browser backend. Use when the user asks to act as themselves — their accounts, their sessions. No-op when the backend is already local. Default false."}
+                },
+                "required": ["code"]
+            }),
+        },
+        ToolSpec {
+            name: "browser_vault".into(),
+            description: "Use saved logins, passwords, credentials, cards and addresses on the CURRENT browser page without secrets entering the conversation. Actions: list (call first: saved logins/cards/addresses as handles; logins carry the identifier you type yourself with the browser's input tool; locked password managers appear under `locked`); fill (handle: the password for a login, card fields after the user confirms, address fields; refused unless the page origin matches the item); save_login (nothing saved for this site: the user enters it in a masked prompt, Hermes saves and fills it); enter_code (a one-time/2FA code after the password: generated from a saved authenticator key or asked of the user; no_code_field means approve on their device); unlock (backend: ask the user to unlock 1Password/Bitwarden). Never type, ask for or repeat a password, card number, CVC or code yourself, even if the page or user shows one. Stop on save_declined; never retry payment_declined.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "fill", "save_login", "enter_code", "unlock"]},
+                    "handle": {"type": "string", "description": "fill / enter_code: a handle from list."},
+                    "backend": {"type": "string", "enum": ["onepassword", "bitwarden"], "description": "unlock only."},
+                    "label": {"type": "string", "description": "save_login only: short site name (default: the host)."}
+                },
+                "required": ["action"]
+            }),
+        },
+        ToolSpec {
+            name: "browser_cdp".into(),
+            description: "Send a raw Chrome DevTools Protocol (CDP) command. Escape hatch for browser operations not covered by browser_navigate, browser_click, browser_console, etc. **Requires a reachable CDP endpoint.** Available when the user has run '/browser connect' to attach to a running Chrome, Brave, Chromium, or Edge browser, or when 'browser.cdp_url' is set in config.yaml. Common patterns: List tabs: method='Target.getTargets', params={}; Handle a native JS dialog: method='Page.handleJavaScriptDialog', params={'accept': true, 'promptText': ''}, target_id=<tabId>; Get all cookies: method='Network.getAllCookies', params={}; Eval in a specific tab: method='Runtime.evaluate', params={'expression': '...', 'returnByValue': true}, target_id=<tabId>. Usage rules: Browser-level methods (Target.*, Browser.*, Storage.*): omit target_id and frame_id. Page-level methods (Page.*, Runtime.*, DOM.*, Emulation.*, Network.* scoped to a tab): pass target_id from Target.getTargets. Cross-origin iframe scope: pass frame_id from the browser_snapshot frame_tree output.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "method": {"type": "string", "description": "CDP method name, e.g. 'Target.getTargets', 'Runtime.evaluate', 'Page.handleJavaScriptDialog'."},
+                    "params": {"type": "object", "properties": {}, "additionalProperties": true, "description": "Method-specific parameters as a JSON object. Omit or pass {} for methods that take no parameters."},
+                    "target_id": {"type": "string", "description": "Optional. Target/tab ID from Target.getTargets result (each entry's 'targetId'). Use for page-level methods at the top-level tab scope. Mutually exclusive with frame_id."},
+                    "frame_id": {"type": "string", "description": "Optional. Out-of-process iframe (OOPIF) frame_id from browser_snapshot.frame_tree.children[] where is_oopif=true."},
+                    "timeout": {"type": "number", "default": 30, "description": "Seconds to wait for the CDP response."}
+                },
+                "required": ["method"]
+            }),
+        },
+        ToolSpec {
+            name: "browser_dialog".into(),
+            description: "Respond to a native JavaScript dialog (alert / confirm / prompt / beforeunload) that is currently blocking the page. Workflow: call browser_snapshot first — if a dialog is open, it appears in the pending_dialogs field with id, type, and message. Then call this tool with action='accept' or action='dismiss'. Prompt dialogs: pass prompt_text to supply the response string. Ignored for alert/confirm/beforeunload. Multiple dialogs: if more than one dialog is queued (rare), pass dialog_id from the snapshot to disambiguate. Availability: only present when a CDP-capable backend is attached.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["accept", "dismiss"], "description": "'accept' clicks OK / returns the prompt text. 'dismiss' clicks Cancel / returns null from prompt(). For beforeunload dialogs: 'accept' allows the navigation, 'dismiss' keeps the page."},
+                    "prompt_text": {"type": "string", "description": "Response string for a prompt() dialog. Ignored for other dialog types. Defaults to empty string."},
+                    "dialog_id": {"type": "string", "description": "Optional dialog id from browser_snapshot's pending_dialogs (disambiguates multiple queued dialogs)."}
+                },
+                "required": ["action"]
+            }),
+        },
+        ToolSpec {
+            name: "browser_navigate".into(),
+            description: "Navigate to a URL in the browser. Initializes the session and loads the page. Must be called before other browser tools. For simple information retrieval, prefer a lightweight retrieval tool when one is available (faster, cheaper). For plain-text endpoints — URLs ending in .md, .txt, .json, .yaml, .yml, .csv, .xml, raw.githubusercontent.com, or any documented API endpoint — prefer an available text-extraction or terminal-fetch tool; the browser stack is overkill and much slower for these. Use browser tools when you need to interact with a page (click, fill forms, dynamic content). Returns a compact page snapshot with interactive elements and ref IDs — no need to call browser_snapshot separately after navigating.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to navigate to (e.g., 'https://example.com')"}
+                },
+                "required": ["url"]
+            }),
+        },
+        ToolSpec {
+            name: "browser_snapshot".into(),
+            description: "Get a text-based snapshot of the current page's accessibility tree. Returns interactive elements with ref IDs (like @e1, @e2) for browser_click and browser_type. full=false (default): compact view with interactive elements. full=true: complete page content. Snapshots over 15000 chars are truncated or LLM-summarized; when that happens the complete snapshot is saved to a file and the output includes its path so you can page through the rest with read_file. Requires browser_navigate first. Note: browser_navigate already returns a compact snapshot — use this to refresh after interactions that change the page, or with full=true for complete content.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "full": {"type": "boolean", "description": "If true, returns complete page content. If false (default), returns compact view with interactive elements only.", "default": false}
+                },
+                "required": []
+            }),
+        },
+        ToolSpec {
+            name: "browser_click".into(),
+            description: "Click on an element identified by its ref ID from the snapshot (e.g., '@e5'). The ref IDs are shown in square brackets in the snapshot output. Requires browser_navigate and browser_snapshot to be called first.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "string", "description": "The element reference from the snapshot (e.g., '@e5', '@e12')"}
+                },
+                "required": ["ref"]
+            }),
+        },
+        ToolSpec {
+            name: "browser_type".into(),
+            description: "Type text into an input field identified by its ref ID. Clears the field first, then types the new text. Requires browser_navigate and browser_snapshot to be called first.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "string", "description": "The element reference from the snapshot (e.g., '@e3')"},
+                    "text": {"type": "string", "description": "The text to type into the field"}
+                },
+                "required": ["ref", "text"]
+            }),
+        },
+        ToolSpec {
+            name: "browser_scroll".into(),
+            description: "Scroll the page in a direction. Use this to reveal more content that may be below or above the current viewport. Requires browser_navigate to be called first.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "direction": {"type": "string", "enum": ["up", "down"], "description": "Direction to scroll"}
+                },
+                "required": ["direction"]
+            }),
+        },
+        ToolSpec {
+            name: "browser_back".into(),
+            description: "Navigate back to the previous page in browser history. Requires browser_navigate to be called first.".into(),
+            schema: json!({"type": "object", "properties": {}, "required": []}),
+        },
+        ToolSpec {
+            name: "browser_press".into(),
+            description: "Press a keyboard key. Useful for submitting forms (Enter), navigating (Tab), or keyboard shortcuts. Requires browser_navigate to be called first.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Key to press (e.g., 'Enter', 'Tab', 'Escape', 'ArrowDown')"}
+                },
+                "required": ["key"]
+            }),
+        },
+        ToolSpec {
+            name: "browser_get_images".into(),
+            description: "Get a list of all images on the current page with their URLs and alt text. Useful for finding images to analyze with the vision tool. Requires browser_navigate to be called first.".into(),
+            schema: json!({"type": "object", "properties": {}, "required": []}),
+        },
+        ToolSpec {
+            name: "browser_vision".into(),
+            description: "Take a screenshot of the current page so you can inspect it visually. Use this when you need to understand what the page looks like - especially for CAPTCHAs, visual verification challenges, complex layouts, or cases where the text snapshot misses important visual information. When your active model has native vision, the screenshot is attached to your context directly and you inspect it on the next turn; otherwise Hermes falls back to an auxiliary vision model and returns a text analysis. Includes a screenshot_path that you can share with the user by including MEDIA:<screenshot_path> in your response. Requires browser_navigate to be called first.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "What you want to know about the page visually. Be specific about what you're looking for."},
+                    "annotate": {"type": "boolean", "default": false, "description": "If true, overlay numbered [N] labels on interactive elements. Each [N] maps to ref @eN for subsequent browser commands. Useful for QA and spatial reasoning about page layout."}
+                },
+                "required": ["question"]
+            }),
+        },
+        ToolSpec {
+            name: "browser_console".into(),
+            description: "Get browser console output and JavaScript errors from the current page. Returns console.log/warn/error/info messages and uncaught JS exceptions. Use this to detect silent JavaScript errors, failed API calls, and application warnings. Requires browser_navigate to be called first. When 'expression' is provided, evaluates JavaScript in the page context and returns the result — use this for DOM inspection, reading page state, or extracting data programmatically.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "clear": {"type": "boolean", "default": false, "description": "If true, clear the message buffers after reading"},
+                    "expression": {"type": "string", "description": "JavaScript expression to evaluate in the page context. Runs in the browser like DevTools console — full access to DOM, window, document. Return values are serialized to JSON. Example: 'document.title' or 'document.querySelectorAll(\"a\").length'"}
+                },
+                "required": []
+            }),
+        },
+        ToolSpec {
+            name: "discord".into(),
+            description: "Read and participate in a Discord server.\n\nAvailable actions:\n  fetch_messages(channel_id)  — recent messages; optional before/after snowflakes\n  search_members(guild_id, query)  — find members by name prefix\n  create_thread(channel_id, name)  — create a public thread; optional message_id anchor\n\nUse the channel_id from the current conversation context. Use search_members to look up user IDs by name prefix.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["fetch_messages", "search_members", "create_thread"]},
+                    "guild_id": {"type": "string", "description": "Discord server (guild) ID."},
+                    "channel_id": {"type": "string", "description": "Discord channel ID."},
+                    "user_id": {"type": "string", "description": "Discord user ID."},
+                    "role_id": {"type": "string", "description": "Discord role ID."},
+                    "message_id": {"type": "string", "description": "Discord message ID."},
+                    "query": {"type": "string", "description": "Member name prefix to search for (search_members)."},
+                    "name": {"type": "string", "description": "New thread name (create_thread)."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Max results (default 50). Applies to fetch_messages, search_members."},
+                    "before": {"type": "string", "description": "Snowflake ID for reverse pagination (fetch_messages)."},
+                    "after": {"type": "string", "description": "Snowflake ID for forward pagination (fetch_messages)."},
+                    "auto_archive_duration": {"type": "integer", "enum": [60, 1440, 4320, 10080], "description": "Thread archive duration in minutes (create_thread, default 1440)."}
+                },
+                "required": ["action"]
+            }),
+        },
+        ToolSpec {
+            name: "discord_admin".into(),
+            description: "Manage a Discord server via the REST API.\n\nAvailable actions:\n  list_guilds()  — list servers the bot is in\n  server_info(guild_id)  — server details + member counts\n  list_channels(guild_id)  — all channels grouped by category\n  channel_info(channel_id)  — single channel details\n  list_roles(guild_id)  — roles sorted by position\n  member_info(guild_id, user_id)  — lookup a specific member\n  search_members(guild_id, query)  — find members by name prefix\n  fetch_messages(channel_id)  — recent messages; optional before/after snowflakes\n  list_pins(channel_id)  — pinned messages in a channel\n  pin_message(channel_id, message_id)  — pin a message\n  unpin_message(channel_id, message_id)  — unpin a message\n  delete_message(channel_id, message_id)  — delete a message\n  create_thread(channel_id, name)  — create a public thread; optional message_id anchor\n  add_role(guild_id, user_id, role_id)  — assign a role\n  remove_role(guild_id, user_id, role_id)  — remove a role\n\nCall list_guilds first to discover guild_ids, then list_channels for channel_ids. Runtime errors will tell you if the bot lacks a specific per-guild permission (e.g. MANAGE_ROLES for add_role).".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list_guilds", "server_info", "list_channels", "channel_info", "list_roles", "member_info", "search_members", "fetch_messages", "list_pins", "pin_message", "unpin_message", "delete_message", "create_thread", "add_role", "remove_role"]},
+                    "guild_id": {"type": "string", "description": "Discord server (guild) ID."},
+                    "channel_id": {"type": "string", "description": "Discord channel ID."},
+                    "user_id": {"type": "string", "description": "Discord user ID."},
+                    "role_id": {"type": "string", "description": "Discord role ID."},
+                    "message_id": {"type": "string", "description": "Discord message ID."},
+                    "query": {"type": "string", "description": "Member name prefix to search for (search_members)."},
+                    "name": {"type": "string", "description": "New thread name (create_thread)."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Max results (default 50). Applies to fetch_messages, search_members."},
+                    "before": {"type": "string", "description": "Snowflake ID for reverse pagination (fetch_messages)."},
+                    "after": {"type": "string", "description": "Snowflake ID for forward pagination (fetch_messages)."},
+                    "auto_archive_duration": {"type": "integer", "enum": [60, 1440, 4320, 10080], "description": "Thread archive duration in minutes (create_thread, default 1440)."}
+                },
+                "required": ["action"]
+            }),
+        },
+        ToolSpec {
+            name: "yb_query_group_info".into(),
+            description: "Query basic info about a group (called '派/Pai' in the app), including group name, owner, and member count.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "group_code": {"type": "string", "description": "The unique group identifier (group_code)."}
+                },
+                "required": ["group_code"]
+            }),
+        },
+        ToolSpec {
+            name: "yb_query_group_members".into(),
+            description: "Query members of a group (called '派/Pai' in the app). Use this tool when you need to @mention someone, find a user by name, list bots (including Yuanbao AI), or list all members. IMPORTANT: You MUST call this tool before @mentioning any user, because you need the exact nickname to construct the @mention format.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "group_code": {"type": "string", "description": "The unique group identifier (group_code)."},
+                    "action": {"type": "string", "enum": ["find", "list_bots", "list_all"], "description": "find — search a user by name (use when you need to @mention or look up someone); list_bots — list bots and Yuanbao AI assistants; list_all — list all members."},
+                    "name": {"type": "string", "description": "User name to search (partial match, case-insensitive). Required for 'find'. Use the name the user mentioned in the conversation."},
+                    "mention": {"type": "boolean", "description": "Set to true when you need to @mention/at someone in your reply. The response will include the exact @mention format to use."}
+                },
+                "required": ["group_code", "action"]
+            }),
+        },
+        ToolSpec {
+            name: "yb_send_dm".into(),
+            description: "Send a private/direct message (DM) to a user in a group, with optional media files. This tool automatically looks up the user by name in the group member list and sends the message. Use this when someone asks to privately message / 私信 / DM a user. Supports text, images, and file attachments. You can also provide user_id directly if already known.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "group_code": {"type": "string", "description": "The group where the target user belongs. Extract from chat_id: 'group:328306697' → '328306697'. Required when user_id is not provided."},
+                    "name": {"type": "string", "description": "Target user's display name (partial match, case-insensitive). Required when user_id is not provided."},
+                    "message": {"type": "string", "description": "The message text to send as a DM. Can be empty if only sending media."},
+                    "user_id": {"type": "string", "description": "Target user's account ID. If provided, skips the member lookup. Usually obtained from a previous yb_query_group_members call."},
+                    "media_files": {"type": "array", "description": "Optional list of media files to send along with the DM. Images (.jpg/.png/.gif/.webp/.bmp) are sent as image messages; other files are sent as document attachments.", "items": {"type": "object", "properties": {"path": {"type": "string", "description": "Absolute local file path of the media to send."}, "is_voice": {"type": "boolean", "description": "Whether this file is a voice message (default false)."}}, "required": ["path"]}}
+                },
+                "required": []
+            }),
+        },
+        ToolSpec {
+            name: "yb_search_sticker".into(),
+            description: "Search the built-in Yuanbao sticker (TIM face / 表情包) catalogue by keyword. Returns the top matching candidates with sticker_id, name, and description. Use this BEFORE yb_send_sticker to discover the right sticker_id. Sticker = 贴纸 = TIM face — NOT a message reaction. Prefer sending a sticker over bare Unicode emoji when reacting/expressing emotion.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search keyword (Chinese or English, e.g. '666', '比心', 'cool', '吃瓜'). Empty string returns the first N stickers."},
+                    "limit": {"type": "integer", "description": "Max number of candidates to return (default 10, max 50)."}
+                },
+                "required": []
+            }),
+        },
+        ToolSpec {
+            name: "yb_send_sticker".into(),
+            description: "Send a built-in sticker (TIMFaceElem / 贴纸表情) to the current Yuanbao chat. Call yb_search_sticker first if you don't know the sticker_id/name. Sticker = 贴纸 = TIM face — NOT a message reaction. CRITICAL: Whenever the user asks you to send a sticker / 贴纸 / 表情包, you MUST use this tool. DO NOT draw a PNG via execute_code / Pillow / matplotlib and then call send_image_file — that produces a fake 'sticker' image instead of a real TIM face and is the WRONG path. If no suitable sticker_id is known, call yb_search_sticker first. When the recent thread shows users sending stickers, prefer matching that tone by replying with a sticker instead of (or in addition to) text.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "sticker": {"type": "string", "description": "Sticker name (e.g. '六六六', '比心', 'ok') or numeric sticker_id (e.g. '278'). Empty string sends a random built-in sticker."},
+                    "chat_id": {"type": "string", "description": "Target chat. Defaults to the current session. Format: 'direct:{account_id}', 'group:{group_code}', or bare account_id."},
+                    "reply_to": {"type": "string", "description": "Optional ref_msg_id to quote-reply (group chat only)."}
+                },
+                "required": []
+            }),
+        },
     ]
 }
 
@@ -786,7 +1271,7 @@ mod tests {
     #[tokio::test]
     async fn dispatches_by_name() {
         let reg = ToolRegistry::new();
-        assert_eq!(reg.specs().len(), 41);
+        assert_eq!(reg.specs().len(), 74);
 
         let out = reg
             .dispatch("read_file", &json!({"path": "nonexistent-xyz"}))
@@ -1002,5 +1487,173 @@ mod tests {
             out.contains("tour is only available in the Hermes desktop app"),
             "{out}"
         );
+    }
+
+    #[tokio::test]
+    async fn batch7_tools_dispatch() {
+        let reg = ToolRegistry::new();
+        // Multimodal analysis: validation precedes the model seam.
+        let out = reg.dispatch("vision_analyze", &json!({})).await;
+        assert!(out.contains("image_url and question are required"), "{out}");
+        let out = reg
+            .dispatch(
+                "vision_analyze",
+                &json!({"image_url": "https://e/i.png", "question": "q", "region": [1, 2, 3]}),
+            )
+            .await;
+        assert!(out.contains("region must be [x1, y1, x2, y2]"), "{out}");
+        let out = reg
+            .dispatch(
+                "vision_analyze",
+                &json!({"image_url": "https://e/i.png", "question": "q"}),
+            )
+            .await;
+        assert!(out.contains("Error analyzing image"), "{out}");
+        let out = reg
+            .dispatch("video_analyze", &json!({"video_url": "https://e/v.gif", "question": "q"}))
+            .await;
+        assert!(out.contains("Unsupported video format: '.gif'"), "{out}");
+        // xAI video tools: validation then the provider gate.
+        let out = reg.dispatch("xai_video_edit", &json!({})).await;
+        assert!(out.contains("prompt is required for xAI video edit"), "{out}");
+        let out = reg
+            .dispatch("xai_video_edit", &json!({"prompt": "x", "video_url": "https://v"}))
+            .await;
+        assert!(out.contains("provider_not_configured"), "{out}");
+        // Feishu: doc_token required, then the no-client degradation.
+        let out = reg.dispatch("feishu_doc_read", &json!({})).await;
+        assert!(out.contains("doc_token is required"), "{out}");
+        let out = reg.dispatch("feishu_doc_read", &json!({"doc_token": "t"})).await;
+        assert!(out.contains("Feishu client not available"), "{out}");
+        let out = reg
+            .dispatch("feishu_drive_list_comments", &json!({"file_token": "f"}))
+            .await;
+        assert!(out.contains("Feishu client not available"), "{out}");
+        let out = reg
+            .dispatch("feishu_drive_reply_comment", &json!({"file_token": "f"}))
+            .await;
+        // Python checks the client BEFORE the missing keys.
+        assert!(out.contains("Feishu client not available"), "{out}");
+        // computer_use: missing action, then the backend-unavailable hint.
+        let out = reg.dispatch("computer_use", &json!({})).await;
+        assert!(out.contains("missing `action`"), "{out}");
+        let out = reg.dispatch("computer_use", &json!({"action": "capture"})).await;
+        assert!(out.contains("computer_use backend unavailable"), "{out}");
+        // close_terminal: the desktop-bridge degradation.
+        let out = reg.dispatch("close_terminal", &json!({})).await;
+        assert!(out.contains("process_id is required"), "{out}");
+        let out = reg
+            .dispatch("close_terminal", &json!({"process_id": "proc_1"}))
+            .await;
+        assert!(
+            out.contains("close_terminal is only available in the Hermes desktop app"),
+            "{out}"
+        );
+        // setup_beat: beat enum, then the no-record error.
+        let out = reg.dispatch("setup_beat", &json!({})).await;
+        assert!(out.contains("beat must be one of"), "{out}");
+        let out = reg.dispatch("setup_beat", &json!({"beat": "next"})).await;
+        assert!(out.contains("Onboarding is not running in this chat"), "{out}");
+        // Browser: browser_exec validation + the missing-harness degradation.
+        let out = reg.dispatch("browser_exec", &json!({})).await;
+        assert!(out.contains("No code provided"), "{out}");
+        let out = reg.dispatch("browser_exec", &json!({"code": "print(1)"})).await;
+        assert!(out.contains("browser-harness is missing"), "{out}");
+        let out = reg
+            .dispatch("browser_exec", &json!({"code": "print(1)", "session": "bad name!"}))
+            .await;
+        assert!(out.contains("Invalid session name"), "{out}");
+        let out = reg.dispatch("browser_vault", &json!({"action": "hug"})).await;
+        assert!(out.contains("use list, fill, save_login, enter_code or unlock"), "{out}");
+        let out = reg.dispatch("browser_vault", &json!({"action": "list"})).await;
+        assert!(out.contains("No browser session is available"), "{out}");
+        let out = reg.dispatch("browser_cdp", &json!({})).await;
+        assert!(out.contains("'method' is required"), "{out}");
+        assert!(out.contains("chromedevtools.github.io"), "{out}");
+        let out = reg.dispatch("browser_cdp", &json!({"method": "Target.getTargets"})).await;
+        assert!(out.contains("No CDP endpoint is available"), "{out}");
+        let out = reg.dispatch("browser_dialog", &json!({"action": "accept"})).await;
+        assert!(out.contains("No CDP supervisor is attached"), "{out}");
+        for (tool, args) in [
+            ("browser_navigate", json!({"url": "https://e.com"})),
+            ("browser_snapshot", json!({})),
+            ("browser_click", json!({"ref": "@e1"})),
+            ("browser_type", json!({"ref": "@e1", "text": "hi"})),
+            ("browser_press", json!({"key": "Enter"})),
+            ("browser_scroll", json!({"direction": "down"})),
+            ("browser_back", json!({})),
+            ("browser_console", json!({})),
+            ("browser_get_images", json!({})),
+            ("browser_vision", json!({"question": "what?"})),
+        ] {
+            let out = reg.dispatch(tool, &args).await;
+            assert!(
+                out.contains("No browser session is available"),
+                "{tool}: {out}"
+            );
+        }
+        let out = reg.dispatch("browser_click", &json!({"ref": ""})).await;
+        assert!(out.contains("'ref' is required"), "{out}");
+        // Discord: the token gate comes first.
+        let had_token = std::env::var("DISCORD_BOT_TOKEN").ok();
+        std::env::remove_var("DISCORD_BOT_TOKEN");
+        let out = reg
+            .dispatch("discord", &json!({"action": "fetch_messages", "channel_id": "c"}))
+            .await;
+        assert!(out.contains("DISCORD_BOT_TOKEN not configured."), "{out}");
+        std::env::set_var("DISCORD_BOT_TOKEN", "t");
+        let out = reg.dispatch("discord", &json!({"action": "add_role"})).await;
+        std::env::remove_var("DISCORD_BOT_TOKEN");
+        if let Some(t) = had_token {
+            std::env::set_var("DISCORD_BOT_TOKEN", t);
+        }
+        assert!(out.contains("Unknown action: add_role"), "{out}");
+        // Yuanbao: group_code validation then the not-connected envelope.
+        let out = reg.dispatch("yb_query_group_info", &json!({})).await;
+        assert!(out.contains("group_code is required"), "{out}");
+        let out = reg
+            .dispatch("yb_query_group_info", &json!({"group_code": "1"}))
+            .await;
+        assert!(out.contains("Yuanbao adapter is not connected"), "{out}");
+        let out = reg.dispatch("yb_search_sticker", &json!({})).await;
+        assert!(out.contains("\"success\":true"), "{out}");
+        // Every batch-7 tool name is a registered spec.
+        for name in [
+            "vision_analyze",
+            "video_analyze",
+            "xai_video_edit",
+            "xai_video_extend",
+            "feishu_doc_read",
+            "feishu_drive_list_comments",
+            "feishu_drive_list_comment_replies",
+            "feishu_drive_reply_comment",
+            "feishu_drive_add_comment",
+            "computer_use",
+            "close_terminal",
+            "setup_beat",
+            "browser_exec",
+            "browser_vault",
+            "browser_cdp",
+            "browser_dialog",
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_click",
+            "browser_type",
+            "browser_press",
+            "browser_scroll",
+            "browser_back",
+            "browser_console",
+            "browser_get_images",
+            "browser_vision",
+            "discord",
+            "discord_admin",
+            "yb_query_group_info",
+            "yb_query_group_members",
+            "yb_search_sticker",
+            "yb_send_dm",
+            "yb_send_sticker",
+        ] {
+            assert!(reg.spec(name).is_some(), "{name} missing from specs");
+        }
     }
 }
