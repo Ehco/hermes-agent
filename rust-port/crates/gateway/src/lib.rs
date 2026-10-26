@@ -33,6 +33,7 @@
 //! - security headers on every response (CSP, nosniff, frame options, ...).
 
 pub mod config;
+pub mod desktop;
 pub mod error;
 pub mod host;
 pub mod middleware;
@@ -40,6 +41,7 @@ pub mod server;
 pub mod turn;
 
 pub use config::{GatewayConfig, MAX_REQUEST_BYTES};
+pub use desktop::DesktopApi;
 pub use host::RegistryHost;
 pub use server::{Gateway, GatewayBuilder};
 pub use turn::{run_streaming_turn, TurnEvent};
