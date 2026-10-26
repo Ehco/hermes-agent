@@ -35,6 +35,17 @@ checkout/reset in the live repo C:\Users\Administrator\AppData\Local\hermes\herm
   terminal tool (execute_code's kernel resets between calls).
 
 ## Wave ledger (latest first)
+- W21: webapp surface (crates/gateway/src/webapp) — WebappSettings from the
+  config webapp block (host canonicalization, bundle staleness NOT_BUILT/
+  NOT_REBUILT), browser credential (session-token + dependency-free
+  SHA-256/HMAC verified vs FIPS/RFC vectors), one-use window/launch tickets
+  (generation-bound), static bundle serving (traversal-guarded, stale 503),
+  nonce-CSP handoff pages, mint_launch_link for the CLI. head 8bd41591cd6e.
+  779 tests, 1045 branch files.
+- W20: RetainDB tool surface complete — the ten retaindb_* tools with
+  byte-frozen schemas, MemoryContext provider seam, legacy fallbacks,
+  visibility gating. head be01fbc78e27. 746 tests, 1038 branch files.
+  Deferred tool surface: EMPTY.
 - W19: optional-skills content (152 packages, 855 files verbatim into
   crates/skills/optional, embedded fallback root + active-copy shadowing +
   locate fallback + "source":"optional" marking), voice transcription HTTP
@@ -90,17 +101,29 @@ checkout/reset in the live repo C:\Users\Administrator\AppData\Local\hermes\herm
   commands/native streaming/media, Slack admin (not present in Python) —
   minor.
 
+- W22: kanban SQLite storage — Python's verbatim schema (7 tables + 14
+  indexes, completion_contract migration, WAL + busy_timeout), legacy JSON
+  import, BEGIN IMMEDIATE boundaries, board paths matching kanban_db_path.
+  Byte-level board interchange verified LIVE both directions (Rust cards
+  read by Python; Python tasks claimed/completed by Rust). head
+  35975fafb1b3. 782 tests, 1046 branch files.
+
 ## Queue (next → later; one agent per wave)
-1. W20 (next): RetainDB plugin completion — the 10 retaindb_* tool schemas
-   via the plugins framework + a memory-provider abstraction (the last
-   deferred tool surface).
-2. Then: periodic upstream re-syncs (SYNC.md cadence) + remaining deferral
-   re-assessments (voice local backends, memory-provider lifecycle, webapp).
+1. W23 (next): Discord native streaming/slash-commands/media lanes + voice
+   local backends assessment.
+2. Then: upstream re-sync cadence; RetainDB lifecycle leftovers; webapp
+   polish.
+3. POST-PORT FLAGSHIP (user-requested 2026-10-26): recreate the desktop UI
+   natively in Rust with GPUI (https://gpui.rs/ — Zed's framework,
+   Windows-supported) once every port is over. Feasibility wave first
+   (crate availability on windows-gnu; window/websocket/system-API needs),
+   then the UI surface: chat transcript, composer, tool cards, settings,
+   tray/notifications. Contract guide: the desktop API crates/gateway
+   already serves.
 
 ## Verification totals
-- W19 push: 723 tests / 0 failures, 12 crates, build clean. Branch files: 1037
-  (incl. 855 optional-content files). Registry closed at 89 tools.
-- Release binaries rebuilt; "Rusted Hermes" shortcut live (smoke-tested).
+- W21 push: 779 tests / 0 failures, 12 crates, build clean. Branch files: 1045.
+  Release binaries rebuilt; "Rusted Hermes" shortcut live (smoke-tested).
 
 ## How to run locally today (HERMES_HOME points at the real profile)
   export PATH="/c/msys64/mingw64/bin:$HOME/.cargo/bin:$PATH"

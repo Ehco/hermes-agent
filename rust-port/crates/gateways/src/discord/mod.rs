@@ -3,4 +3,7 @@
 
 pub mod format;
 pub mod gateway;
+pub mod interactions;
+pub mod media;
 pub mod rest;
+pub mod streaming;

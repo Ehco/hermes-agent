@@ -300,6 +300,246 @@ where
     }
 }
 
+// ── the local `local_command` backend (`tools/transcription_local.py`) ──────
+//
+// The one local STT backend portable without the audio stack: the
+// faster-whisper in-process path stays Python-side (ctranslate2 is not), but
+// `local_command` just SHELLS OUT — a command template with `{input_path}`,
+// `{output_dir}`, `{language}`, `{model}` placeholders, a temp output dir, and
+// a `*.txt` read-back. The process spawn, temp-dir and audio preparation are
+// the injected [`LocalSttRunner`] seam; everything decision-shaped ports.
+
+/// `transcription_common.py::LOCAL_STT_COMMAND_ENV`.
+pub const LOCAL_STT_COMMAND_ENV: &str = "HERMES_LOCAL_STT_COMMAND";
+/// `transcription_common.py::DEFAULT_LOCAL_MODEL` — `stt.local.model` default.
+pub const DEFAULT_LOCAL_MODEL: &str = "base";
+/// `transcription_common.py::DEFAULT_LOCAL_STT_LANGUAGE`.
+pub const DEFAULT_LOCAL_STT_LANGUAGE: &str = "en";
+
+/// `transcription_local.py::_LOCAL_LANGUAGE_ALIASES` + the bare CJK names
+/// that reach it (`stt.local.language` may carry the raw glyphs).
+const LOCAL_LANGUAGE_ALIASES: &[(&str, &str)] = &[
+    ("繁體中文", "zh"),
+    ("繁体中文", "zh"),
+    ("简体中文", "zh"),
+    ("簡體中文", "zh"),
+];
+
+/// `_THREE_LETTER_WHISPER_CODES`.
+const THREE_LETTER_WHISPER_CODES: &[&str] = &["haw", "yue"];
+
+/// The cloud-only model names `_normalize_local_model` rejects
+/// (`OPENAI_MODELS | GROQ_MODELS | RETIRED_GROQ_MODELS`; the catalogs are
+/// static in transcription_common.py).
+const CLOUD_ONLY_MODELS: &[&str] = &[
+    "whisper-1",
+    "gpt-4o-mini-transcribe",
+    "gpt-4o-transcribe",
+    "gpt-transcribe",
+    "whisper-large-v3-turbo",
+    "whisper-large-v3",
+    "distil-whisper-large-v3-en",
+];
+
+/// `posix_shlex.quote` — single-quote for anything outside
+/// `[a-zA-Z0-9_@%+=:,./-]`, doubling embedded quotes (`'a'\''b'`).
+pub fn shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-'))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// `_normalize_local_stt_language` — a Whisper language code, or `None` so the
+/// caller falls back safely. Alias resolution → the first dash-segment, then
+/// the shape gate (2 letters, or one of the 3-letter Whisper codes), then the
+/// optional supported-codes gate.
+pub fn normalize_local_stt_language(
+    language: Option<&str>,
+    supported_languages: Option<&[String]>,
+) -> Option<String> {
+    let raw = language?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let folded = raw.to_lowercase().replace('_', "-");
+    let candidate = match LOCAL_LANGUAGE_ALIASES.iter().find(|(alias, _)| *alias == raw) {
+        Some((_, code)) => (*code).to_string(),
+        None => folded.split('-').next().unwrap_or("").to_string(),
+    };
+    let code_shape_valid = candidate.len() == 2
+        || THREE_LETTER_WHISPER_CODES.contains(&candidate.as_str());
+    let all_ascii_alpha = !candidate.is_empty()
+        && candidate.bytes().all(|b| b.is_ascii_alphabetic());
+    if !(all_ascii_alpha && code_shape_valid) {
+        return None;
+    }
+    if let Some(supported) = supported_languages {
+        if !supported
+            .iter()
+            .any(|code| code.to_lowercase() == candidate)
+        {
+            return None;
+        }
+    }
+    Some(candidate)
+}
+
+/// `_normalize_local_model` — blank → the default; a cloud-only name falls
+/// back to the default (the Python logs a warning — log host-side); anything
+/// else passes through as a valid faster-whisper size.
+pub fn normalize_local_model(model_name: Option<&str>) -> String {
+    match model_name.map(str::trim).filter(|m| !m.is_empty()) {
+        None => DEFAULT_LOCAL_MODEL.to_string(),
+        Some(name) => {
+            if CLOUD_ONLY_MODELS.contains(&name) {
+                DEFAULT_LOCAL_MODEL.to_string()
+            } else {
+                name.to_string()
+            }
+        }
+    }
+}
+
+/// `str.format` over the template with the four placeholder keys: known keys
+/// substitute the (already shell-quoted) values, `{{`/`}}` escape a literal
+/// brace, and an unknown key is the Python `KeyError` →
+/// `"Invalid <env> template, missing placeholder: '<key>'"`.
+pub fn format_local_command(
+    template: &str,
+    input_path: &str,
+    output_dir: &str,
+    language: &str,
+    model: &str,
+) -> Result<String, String> {
+    let substitutions = [
+        ("input_path", shell_quote(input_path)),
+        ("output_dir", shell_quote(output_dir)),
+        ("language", shell_quote(language)),
+        ("model", shell_quote(model)),
+    ];
+    let mut out = String::with_capacity(template.len());
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' if i + 1 < bytes.len() && bytes[i + 1] == b'{' => {
+                out.push('{');
+                i += 2;
+            }
+            b'}' if i + 1 < bytes.len() && bytes[i + 1] == b'}' => {
+                out.push('}');
+                i += 2;
+            }
+            b'{' => {
+                let close = template[i + 1..].find('}').map(|p| i + 1 + p);
+                let key = close.and_then(|c| {
+                    if c > i + 1 {
+                        Some(&template[i + 1..c])
+                    } else {
+                        None
+                    }
+                });
+                match key.and_then(|k| {
+                    substitutions
+                        .iter()
+                        .find(|(name, _)| *name == k)
+                        .map(|(_, v)| (close.unwrap_or(i), v.clone()))
+                }) {
+                    Some((close, value)) => {
+                        out.push_str(&value);
+                        i = close + 1;
+                    }
+                    _ => {
+                        let key = key.unwrap_or("");
+                        return Err(format!(
+                            "Invalid {LOCAL_STT_COMMAND_ENV} template, missing placeholder: '{key}'"
+                        ));
+                    }
+                }
+            }
+            _ => {
+                let ch = template[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The injected seam: run the formatted command line (already shell-quoted,
+/// as the Python `shlex.split(command)` + `_run_quiet` would) inside a fresh
+/// output directory; `Err` is the `_process_error_detail` string. The runner
+/// also owns the audio preparation (`_prepare_local_audio`) and the `*.txt`
+/// read-back, because those touch the filesystem.
+pub trait LocalSttRunner {
+    /// Prepare `input_path` for the CLI (the Python `_prepare_local_audio` —
+    /// transcoding/transcode-skip); `Err` is the prep error text.
+    fn prepare_audio(&self, input_path: &str) -> Result<String, String>;
+    /// The fresh output directory for this run (the Python
+    /// `tempfile.TemporaryDirectory(prefix="hermes-local-stt-")`).
+    fn output_dir(&self) -> String;
+    /// Run the command; `Err` = the CalledProcessError detail.
+    fn run(&self, command_line: &str) -> Result<(), String>;
+    /// Sorted `*.txt` names produced in the output dir.
+    fn transcript_files(&self) -> Vec<String>;
+    /// Read one transcript file (UTF-8, BOM-tolerant, trimmed).
+    fn read_transcript(&self, name: &str) -> Result<String, String>;
+}
+
+/// `_transcribe_local_command` — run the configured local STT command template
+/// and read back a `.txt` transcript, into the shared envelope. `template` is
+/// the resolved command (`HERMES_LOCAL_STT_COMMAND` / whisper.cpp / the
+/// discovered whisper binary — template RESOLUTION stays host-side);
+/// `None` = the Python "not configured and no local whisper binary" error.
+/// `configured_language` is the hook/config-resolved language (the
+/// `_resolve_stt_language` ladder stays host-side).
+pub fn transcribe_local_command<R: LocalSttRunner>(
+    runner: &R,
+    template: Option<&str>,
+    file_path: &str,
+    model_name: Option<&str>,
+    configured_language: Option<&str>,
+) -> Value {
+    let Some(template) = template.filter(|t| !t.trim().is_empty()) else {
+        return stt_error_result(
+            &format!("{LOCAL_STT_COMMAND_ENV} not configured and no local whisper binary was found"),
+            false,
+        );
+    };
+    // Language: hook override > stt.local.language > stt.language > env > "en"
+    // (the ladder already ran host-side); an unusable code falls back to "en".
+    let language = normalize_local_stt_language(configured_language, None)
+        .unwrap_or_else(|| DEFAULT_LOCAL_STT_LANGUAGE.to_string());
+    let model = normalize_local_model(model_name);
+    let output_dir = runner.output_dir();
+    let command = match format_local_command(template, file_path, &output_dir, &language, &model) {
+        Ok(command) => command,
+        Err(e) => return stt_error_result(&e, false),
+    };
+    if let Err(prep_error) = runner.prepare_audio(file_path) {
+        return stt_error_result(&prep_error, false);
+    }
+    if let Err(detail) = runner.run(&command) {
+        return stt_error_result(&format!("Local STT failed: {detail}"), false);
+    }
+    match runner.transcript_files().first() {
+        None => stt_error_result(
+            "Local STT command completed but did not produce a .txt transcript",
+            false,
+        ),
+        Some(name) => match runner.read_transcript(name) {
+            Err(e) => stt_error_result(&format!("Local transcription failed: {e}"), false),
+            Ok(text) => stt_ok_result(text.trim(), "local_command"),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,3 +807,193 @@ mod tests {
         );
     }
 }
+
+// ── local_command backend tests ─────────────────────────────────────────────
+
+#[cfg(test)]
+mod local_command_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Records the command line; scripts the prep/run/read outcomes.
+    struct StubRunner {
+        output_dir: String,
+        run_line: std::sync::Mutex<Vec<String>>,
+        fail_run: bool,
+        files: Vec<String>,
+        transcript: String,
+    }
+
+    impl StubRunner {
+        fn new() -> Self {
+            StubRunner {
+                output_dir: "/tmp/hermes-local-stt-abc".into(),
+                run_line: std::sync::Mutex::new(Vec::new()),
+                fail_run: false,
+                files: vec![],
+                transcript: "hello world".into(),
+            }
+        }
+    }
+
+    impl LocalSttRunner for StubRunner {
+        fn prepare_audio(&self, _input_path: &str) -> Result<String, String> {
+            Ok("prepared.wav".into())
+        }
+        fn output_dir(&self) -> String {
+            self.output_dir.clone()
+        }
+        fn run(&self, command_line: &str) -> Result<(), String> {
+            self.run_line.lock().unwrap().push(command_line.to_string());
+            if self.fail_run {
+                Err("exit status 1: model not found".into())
+            } else {
+                Ok(())
+            }
+        }
+        fn transcript_files(&self) -> Vec<String> {
+            self.files.clone()
+        }
+        fn read_transcript(&self, _name: &str) -> Result<String, String> {
+            Ok(self.transcript.clone())
+        }
+    }
+
+    const TEMPLATE: &str =
+        "whisper {input_path} --model {model} --output_format txt --output_dir {output_dir} --language {language}";
+
+    #[test]
+    fn shell_quotes_only_unsafe_values() {
+        assert_eq!(shell_quote("/opt/homebrew/bin/whisper"), "/opt/homebrew/bin/whisper");
+        assert_eq!(shell_quote("base"), "base");
+        assert_eq!(shell_quote("my model"), "'my model'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn language_normalization_matches_the_python_gates() {
+        // CJK aliases → zh.
+        assert_eq!(normalize_local_stt_language(Some("简体中文"), None), Some("zh".into()));
+        // Regional tag folds to the primary code.
+        assert_eq!(normalize_local_stt_language(Some("pt-BR"), None), Some("pt".into()));
+        // Underscores fold before the split.
+        assert_eq!(normalize_local_stt_language(Some("en_US"), None), Some("en".into()));
+        // The two 3-letter Whisper codes survive.
+        assert_eq!(normalize_local_stt_language(Some("yue"), None), Some("yue".into()));
+        // Non-code noise → None (caller falls back).
+        assert_eq!(normalize_local_stt_language(Some("kitchen"), None), None);
+        assert_eq!(normalize_local_stt_language(Some(""), None), None);
+        // The supported-codes gate rejects an unsupported code.
+        let supported = vec!["en".to_string(), "fr".to_string()];
+        assert_eq!(normalize_local_stt_language(Some("pt"), Some(&supported)), None);
+        assert_eq!(normalize_local_stt_language(Some("fr"), Some(&supported)), Some("fr".into()));
+    }
+
+    #[test]
+    fn cloud_only_model_names_fall_back_to_the_default() {
+        assert_eq!(normalize_local_model(None), "base");
+        assert_eq!(normalize_local_model(Some("")), "base");
+        assert_eq!(normalize_local_model(Some("whisper-1")), "base");
+        assert_eq!(normalize_local_model(Some("distil-whisper-large-v3-en")), "base");
+        assert_eq!(normalize_local_model(Some("turbo")), "turbo");
+        assert_eq!(normalize_local_model(Some("large-v3")), "large-v3");
+    }
+
+    #[test]
+    fn template_formatting_substitutes_quoted_placeholders() {
+        let out = format_local_command(
+            TEMPLATE,
+            "/tmp/song.mp3",
+            "/tmp/out",
+            "en",
+            "base",
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "whisper /tmp/song.mp3 --model base --output_format txt --output_dir /tmp/out --language en"
+        );
+        // A path with a space is quoted.
+        let out = format_local_command(
+            TEMPLATE,
+            "/tmp/my song.mp3",
+            "/tmp/out dir",
+            "en",
+            "base",
+        )
+        .unwrap();
+        assert!(out.contains("'/tmp/my song.mp3'"));
+        assert!(out.contains("'/tmp/out dir'"));
+        // Escaped literal braces render single, as str.format does.
+        let out = format_local_command("a {{b}} {language} c", "i", "o", "en", "base").unwrap();
+        assert_eq!(out, "a {b} en c");
+    }
+
+    #[test]
+    fn unknown_placeholders_error_like_the_python_keyerror() {
+        let err = format_local_command("whisper {input_path} {vad}", "i", "o", "en", "base")
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "Invalid HERMES_LOCAL_STT_COMMAND template, missing placeholder: 'vad'"
+        );
+        // A dangling unclosed brace is the Python KeyError('') shape.
+        let err = format_local_command("whisper {input", "i", "o", "en", "base").unwrap_err();
+        assert!(err.contains("missing placeholder: ''"));
+    }
+
+    #[test]
+    fn unset_template_is_the_not_configured_error() {
+        let runner = StubRunner::new();
+        let out = transcribe_local_command(&runner, None, "a.mp3", None, None);
+        assert_eq!(
+            out["error"],
+            "HERMES_LOCAL_STT_COMMAND not configured and no local whisper binary was found"
+        );
+        assert_eq!(out["success"], false);
+    }
+
+    #[test]
+    fn the_full_flow_quotes_runs_and_reads_back_the_transcript() {
+        let mut runner = StubRunner::new();
+        runner.files = vec!["song.txt".into()];
+        let out = transcribe_local_command(
+            &runner,
+            Some(TEMPLATE),
+            "/tmp/my song.mp3",
+            Some("turbo"),
+            Some("pt-BR"),
+        );
+        assert_eq!(out, json!({ "success": true, "transcript": "hello world", "provider": "local_command" }));
+        let lines = runner.run_line.lock().unwrap();
+        assert_eq!(
+            lines[0],
+            "whisper '/tmp/my song.mp3' --model turbo --output_format txt --output_dir /tmp/hermes-local-stt-abc --language pt"
+        );
+    }
+
+    #[test]
+    fn process_failure_names_the_detail() {
+        let mut runner = StubRunner::new();
+        runner.fail_run = true;
+        let out = transcribe_local_command(&runner, Some(TEMPLATE), "a.mp3", None, None);
+        assert_eq!(out["error"], "Local STT failed: exit status 1: model not found");
+    }
+
+    #[test]
+    fn missing_txt_output_is_its_own_error() {
+        let mut runner = StubRunner::new();
+        runner.files = vec![];
+        let out = transcribe_local_command(&runner, Some(TEMPLATE), "a.mp3", None, None);
+        assert_eq!(
+            out["error"],
+            "Local STT command completed but did not produce a .txt transcript"
+        );
+        // An unusable language code falls back to "en" in the command.
+        runner.files = vec!["out.txt".into()];
+        transcribe_local_command(&runner, Some(TEMPLATE), "a.mp3", None, Some("kitchen"));
+        assert!(runner.run_line.lock().unwrap().last().unwrap().ends_with("--language en"));
+    }
+}
+

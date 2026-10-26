@@ -111,6 +111,21 @@ pub trait HttpBackend: Send + Sync + 'static {
             ))
         })
     }
+    /// POST a raw body with an explicit Content-Type (the Discord attachment
+    /// lane: a prebuilt multipart/form-data body). JSON-only backends default
+    /// to a clear error.
+    fn post_raw_body<'a>(
+        &'a self,
+        _url: String,
+        _content_type: String,
+        _body: Vec<u8>,
+    ) -> BoxFut<'a, Result<serde_json::Value>> {
+        Box::pin(async move {
+            Err(anyhow::anyhow!(
+                "raw-body POST not supported by this HTTP backend"
+            ))
+        })
+    }
 }
 
 /// Production backend over the shared `reqwest::Client`.
@@ -192,6 +207,29 @@ impl HttpBackend for ReqwestBackend {
                 anyhow::bail!("HTTP {}: {}", status, body);
             }
             Ok(body)
+        })
+    }
+
+    fn post_raw_body<'a>(
+        &'a self,
+        url: String,
+        content_type: String,
+        body: Vec<u8>,
+    ) -> BoxFut<'a, Result<serde_json::Value>> {
+        Box::pin(async move {
+            let resp = self
+                .http
+                .post(url)
+                .header("Content-Type", content_type)
+                .body(body)
+                .send()
+                .await?;
+            let status = resp.status();
+            let text = resp.text().await?;
+            if !status.is_success() {
+                anyhow::bail!("HTTP {}: {}", status, text);
+            }
+            serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("bad JSON: {}", e))
         })
     }
 }

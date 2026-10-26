@@ -39,6 +39,17 @@ impl<B: HttpBackend> DiscordRest<B> {
         }
     }
 
+    /// The resolved API base (tests assert against the configured base).
+    pub fn base_url(&self) -> &str {
+        &self.base
+    }
+
+    /// Crate-internal access to the HTTP backend (the media lane builds its
+    /// own raw multipart body).
+    pub(crate) fn http_backend(&self) -> &B {
+        &self.http
+    }
+
     /// Bearer-auth JSON POST helper (the Python client sends
     /// `Authorization: Bot <token>`; reqwest's `bearer_auth` is equivalent).
     #[allow(dead_code)]

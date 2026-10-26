@@ -16,10 +16,13 @@
 //! [`RetainDbClient`] routes and the injected [`MemoryContext`] lifecycle.
 //!
 //! What stays unported (the original deferral reasons hold for them): the
-//! plugin registration/lifecycle and the SQLite write-behind queue — those
-//! need the memory-provider lifecycle the Rust host doesn't run (see
-//! `crates/tools/port_notes.md` for the documented gaps). HTTP itself is
-//! behind [`RetainDbTransport`], so tests stub the wire (no live network).
+//! plugin registration/lifecycle — it needs the memory-provider lifecycle the
+//! Rust host doesn't run (see `crates/tools/port_notes.md` for the
+//! documented gaps). The durable SQLite write-behind queue IS ported — see
+//! [`WriteQueue`] (the `_WriteQueue` class; the queue is self-contained, and
+//! its only coupling to the provider lifecycle — the `sync_turn` caller —
+//! stays host-side). HTTP itself is behind [`RetainDbTransport`], so tests
+//! stub the wire (no live network).
 
 use serde_json::{json, Value};
 
@@ -195,6 +198,25 @@ impl<T: RetainDbTransport> RetainDbClient<T> {
                 user_id,
                 session_id,
                 &json!({ "query": query, "top_k": top_k, "include_pending": true }),
+            )),
+        )
+    }
+
+    /// `ingest_session` — POST `/v1/memory/ingest/session` (the write-behind
+    /// queue's flush call; the 15s timeout is host-side).
+    pub fn ingest_session(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        messages: &Value,
+    ) -> Result<Value, String> {
+        self.transport.request(
+            "POST",
+            "/v1/memory/ingest/session",
+            Some(&self.scoped(
+                user_id,
+                session_id,
+                &json!({ "messages": messages, "write_mode": "sync" }),
             )),
         )
     }
@@ -1823,5 +1845,518 @@ mod tests {
         let long = "x ".repeat(300); // 600 chars
         assert_eq!(compact(&long).len(), 320);
         assert_eq!(norm("Drinks TEA!"), "drinks tea");
+    }
+}
+
+// ── the durable SQLite write-behind queue (`_WriteQueue`) ───────────────────
+
+/// Queue knobs (the Python hardcodes both; tests need to shorten the retry).
+#[derive(Debug, Clone)]
+pub struct WriteQueueSettings {
+    /// The failure retry sleep (`time.sleep(2)` in `_flush_row`).
+    pub retry_sleep: std::time::Duration,
+}
+
+impl Default for WriteQueueSettings {
+    fn default() -> Self {
+        WriteQueueSettings {
+            retry_sleep: std::time::Duration::from_secs(2),
+        }
+    }
+}
+
+/// One pending turn (the `pending` table row + its in-memory queue entry).
+#[derive(Debug, Clone)]
+pub struct PendingTurn {
+    pub row_id: i64,
+    pub user_id: String,
+    pub session_id: String,
+    pub messages: Value,
+}
+
+/// SQLite-backed async write queue (`_WriteQueue`). Survives crashes —
+/// pending rows replay on startup (up to `REPLAY_LIMIT` oldest-first).
+///
+/// Shape faithful to the Python: `enqueue` INSERTs durably, then hands the
+/// row to a background writer thread (`spawn_context_thread` — the contextvars
+/// binding is Python-side); the writer calls
+/// [`RetainDbClient::ingest_session`], deletes the row on success, and on
+/// failure records `last_error` and sleeps before the next attempt (the row
+/// stays pending). `shutdown` is idempotent, signals the writer, and joins.
+///
+/// Host-side differences (documented, not behavioral): the Python keeps one
+/// sqlite connection per thread via `threading.local` — here one
+/// `Mutex<Connection>` serves both threads (sqlite serializes writers anyway);
+/// the writer thread joins without a timeout (the Python joins with a 10s cap
+/// and then closes straggler handles — the Mutex connection cannot straggle).
+pub struct WriteQueue {
+    conn: std::sync::Mutex<rusqlite::Connection>,
+    pending_tx: std::sync::mpsc::Sender<Option<PendingTurn>>,
+    writer: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    settings: WriteQueueSettings,
+}
+
+/// The startup replay cap (`ORDER BY id ASC LIMIT 200`).
+const REPLAY_LIMIT: i64 = 200;
+
+impl WriteQueue {
+    /// `__init__`: create the table, start the writer, replay crash-left
+    /// rows into the queue (oldest first).
+    pub fn open(
+        transport: std::sync::Arc<dyn RetainDbTransport>,
+        base_url: &str,
+        project: &str,
+        db_path: &std::path::Path,
+    ) -> Result<WriteQueue, String> {
+        WriteQueue::open_with(transport, base_url, project, db_path, WriteQueueSettings::default())
+    }
+
+    /// `open` with explicit settings (tests shorten the retry sleep).
+    pub fn open_with(
+        transport: std::sync::Arc<dyn RetainDbTransport>,
+        base_url: &str,
+        project: &str,
+        db_path: &std::path::Path,
+        settings: WriteQueueSettings,
+    ) -> Result<WriteQueue, String> {
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let conn = rusqlite::Connection::open(db_path)
+            .map_err(|e| format!("open retaindb queue db: {e}"))?;
+        let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pending (id INTEGER PRIMARY KEY AUTOINCREMENT, \
+             user_id TEXT, session_id TEXT, messages_json TEXT, created_at TEXT, last_error TEXT)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        let (tx, rx) = std::sync::mpsc::channel::<Option<PendingTurn>>();
+        let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // Replay rows left from a previous crash.
+        let replay = replay_pending(&conn, REPLAY_LIMIT)?;
+        let db_path = db_path.to_path_buf();
+        for turn in replay {
+            let _ = tx.send(Some(turn));
+        }
+        let writer_transport = transport.clone();
+        let writer_base = base_url.to_string();
+        let writer_project = project.to_string();
+        let writer_settings = settings.clone();
+        let writer = std::thread::Builder::new()
+            .name("retaindb-writer".into())
+            .spawn(move || {
+                writer_loop(
+                    writer_transport,
+                    writer_base,
+                    writer_project,
+                    db_path.to_path_buf(),
+                    rx,
+                    writer_settings,
+                )
+            })
+            .map_err(|e| format!("spawn retaindb writer: {e}"))?;
+        Ok(WriteQueue {
+            conn: std::sync::Mutex::new(conn),
+            pending_tx: tx,
+            writer: std::sync::Mutex::new(Some(writer)),
+            shutdown,
+            settings,
+        })
+    }
+
+    /// `enqueue` — INSERT the turn durably, then hand it to the writer.
+    /// A shutdown queue silently drops (the Python `if self._shutdown: return`).
+    pub fn enqueue(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        messages: &Value,
+    ) -> Result<(), String> {
+        if self.shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        let now = iso_timestamp();
+        let messages_json = serde_json::to_string(messages).map_err(|e| e.to_string())?;
+        let row_id = {
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO pending (user_id, session_id, messages_json, created_at) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![user_id, session_id, messages_json, now],
+            )
+            .map_err(|e| e.to_string())?;
+            conn.last_insert_rowid()
+        };
+        let _ = self.pending_tx.send(Some(PendingTurn {
+            row_id,
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
+            messages: messages.clone(),
+        }));
+        Ok(())
+    }
+
+    /// `shutdown` — idempotent: signal the writer, join it, leaving every
+    /// undelivered row pending for the next startup's replay.
+    pub fn shutdown(&self) {
+        if self
+            .shutdown
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        let _ = self.pending_tx.send(None);
+        if let Some(handle) = self.writer.lock().unwrap().take() {
+            let _ = handle.join();
+        }
+    }
+
+    /// Test/diagnostic read of the pending table.
+    fn pending_rows(&self) -> Vec<(i64, Option<String>)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, last_error FROM pending ORDER BY id ASC")
+            .expect("pending select");
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("pending query")
+            .filter_map(Result::ok)
+            .collect()
+    }
+}
+
+impl Drop for WriteQueue {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+/// `_flush_row` + `_loop` — drain the queue; success deletes the row, failure
+/// records `last_error` and sleeps (the row stays pending; the next enqueue
+/// or a restart replays it).
+fn writer_loop(
+    transport: std::sync::Arc<dyn RetainDbTransport>,
+    base_url: String,
+    project: String,
+    db_path: std::path::PathBuf,
+    rx: std::sync::mpsc::Receiver<Option<PendingTurn>>,
+    settings: WriteQueueSettings,
+) {
+    let client = RetainDbClient::new(transport, &base_url, &project);
+    while let Ok(item) = rx.recv() {
+        let Some(turn) = item else { break };
+        match client.ingest_session(&turn.user_id, &turn.session_id, &turn.messages) {
+            Ok(_) => {
+                // Row delivered: delete it (the Python `_execute("DELETE …")`).
+                if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                    let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+                    let _ = conn.execute("DELETE FROM pending WHERE id = ?1", [turn.row_id]);
+                }
+            }
+            Err(exc) => {
+                // "RetainDB ingest failed (will retry): {exc}" — log host-side.
+                if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                    let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+                    let _ = conn.execute(
+                        "UPDATE pending SET last_error = ?1 WHERE id = ?2",
+                        rusqlite::params![exc, turn.row_id],
+                    );
+                }
+                std::thread::sleep(settings.retry_sleep);
+            }
+        }
+        // The shutdown sentinel arrives next and breaks the loop; any row
+        // left behind stays pending for the next startup's replay.
+    }
+}
+
+/// `datetime.now(UTC).isoformat()`.
+fn iso_timestamp() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    // Second precision is enough for the created_at audit column.
+    let secs = now.as_secs();
+    let (y, mo, d, h, mi, s) = civil_from_unix(secs as i64);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}+00:00")
+}
+
+/// days-from-civil inverse (Howard Hinnant's `civil_from_days` arithmetic) —
+/// the stdlib has no formatter, and this column is audit-only.
+fn civil_from_unix(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = y - ((m <= 2) as i64);
+    (
+        year,
+        m,
+        d,
+        (rem / 3600) as u32,
+        ((rem % 3600) / 60) as u32,
+        (rem % 60) as u32,
+    )
+}
+
+/// The startup replay: up to `limit` oldest pending rows
+/// (`SELECT … ORDER BY id ASC LIMIT 200`).
+fn replay_pending(conn: &rusqlite::Connection, limit: i64) -> Result<Vec<PendingTurn>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, user_id, session_id, messages_json FROM pending ORDER BY id ASC LIMIT ?1")
+        .map_err(|e| e.to_string())?;
+    let rows: Vec<PendingTurn> = stmt
+        .query_map([limit], |row| {
+            let messages_json: String = row.get(3)?;
+            let messages = serde_json::from_str(&messages_json)
+                .unwrap_or_else(|_| json!({ "messages": messages_json }));
+            Ok(PendingTurn {
+                row_id: row.get(0)?,
+                user_id: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                session_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                messages,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(Result::ok)
+        .collect();
+    Ok(rows)
+}
+
+// ── write-queue tests ───────────────────────────────────────────────────────
+#[cfg(test)]
+mod writequeue_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// A failing-then-succeeding ingest script, counting calls.
+    struct ScriptedTransport {
+        fail_first_n: std::sync::atomic::AtomicI64,
+        calls: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl ScriptedTransport {
+        fn failing() -> Self {
+            ScriptedTransport {
+                fail_first_n: std::sync::atomic::AtomicI64::new(i64::MAX),
+                calls: std::sync::Mutex::new(vec![]),
+            }
+        }
+        fn succeeding() -> Self {
+            ScriptedTransport {
+                fail_first_n: std::sync::atomic::AtomicI64::new(0),
+                calls: std::sync::Mutex::new(vec![]),
+            }
+        }
+    }
+
+    impl RetainDbTransport for ScriptedTransport {
+        fn request(
+            &self,
+            method: &str,
+            path: &str,
+            _json_body: Option<&Value>,
+        ) -> Result<Value, String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((method.to_string(), path.to_string()));
+            let remaining = self
+                .fail_first_n
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            if remaining > 0 {
+                Err("RetainDB POST /v1/memory/ingest/session failed (500): busy".into())
+            } else {
+                Ok(json!({ "ok": true }))
+            }
+        }
+        fn request_raw(
+            &self,
+            _method: &str,
+            _path: &str,
+            _content_type: &str,
+            _body: Vec<u8>,
+        ) -> Result<Value, String> {
+            Err("unused".into())
+        }
+        fn download(&self, _path: &str) -> Result<Vec<u8>, String> {
+            Err("unused".into())
+        }
+    }
+
+    /// A unique temp-file path per queue instance.
+    fn temp_db() -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("hermes-rdb-queue-test-{nanos}.db"))
+    }
+
+    /// Wait (up to ~4s) until `cond` holds, so the writer thread catches up.
+    fn wait_for(cond: impl Fn() -> bool) -> bool {
+        for _ in 0..80 {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        cond()
+    }
+
+    #[test]
+    fn ingest_session_posts_the_scoped_sync_write() {
+        let stub = Arc::new(ScriptedTransport::succeeding());
+        let transport: Arc<dyn RetainDbTransport> = stub.clone();
+        let client = RetainDbClient::new(transport, "https://api.retaindb.com", "hermes-main");
+        client
+            .ingest_session("u1", "s1", &json!([{ "role": "user", "content": "hi" }]))
+            .unwrap();
+        let calls = stub.calls.lock().unwrap();
+        assert_eq!(calls[0].0, "POST");
+        assert_eq!(calls[0].1, "/v1/memory/ingest/session");
+        // The body carries the scoped prefix + sync write_mode; the transport
+        // stub records (method, path) only, so the body shape is pinned in the
+        // `RetainDbClient::ingest_session` contract via the scoped helper
+        // (same builder every other POST route uses).
+    }
+
+    /// Records the full (method, path, body) of one POST — pins the
+    /// `ingest_session` wire body.
+    struct BodyRecording {
+        calls: std::sync::Mutex<Vec<(String, String, Option<Value>)>>,
+    }
+
+    impl RetainDbTransport for BodyRecording {
+        fn request(
+            &self,
+            method: &str,
+            path: &str,
+            json_body: Option<&Value>,
+        ) -> Result<Value, String> {
+            self.calls.lock().unwrap().push((
+                method.to_string(),
+                path.to_string(),
+                json_body.cloned(),
+            ));
+            Ok(json!({ "ok": true }))
+        }
+        fn request_raw(
+            &self,
+            _method: &str,
+            _path: &str,
+            _content_type: &str,
+            _body: Vec<u8>,
+        ) -> Result<Value, String> {
+            Err("unused".into())
+        }
+        fn download(&self, _path: &str) -> Result<Vec<u8>, String> {
+            Err("unused".into())
+        }
+    }
+
+    #[test]
+    fn ingest_session_carries_the_scoped_sync_body() {
+        let stub = Arc::new(BodyRecording {
+            calls: std::sync::Mutex::new(vec![]),
+        });
+        let transport: Arc<dyn RetainDbTransport> = stub.clone();
+        let client = RetainDbClient::new(transport, "https://api.retaindb.com/", "hermes-main");
+        client
+            .ingest_session("u1", "s1", &json!([{ "role": "user", "content": "hi" }]))
+            .unwrap();
+        let calls = stub.calls.lock().unwrap();
+        assert_eq!(calls[0].0, "POST");
+        assert_eq!(calls[0].1, "/v1/memory/ingest/session");
+        assert_eq!(
+            calls[0].2.clone().unwrap(),
+            json!({
+                "project": "hermes-main", "user_id": "u1", "session_id": "s1",
+                "messages": [{ "role": "user", "content": "hi" }],
+                "write_mode": "sync",
+            }),
+        );
+    }
+
+    #[test]
+    fn flushed_rows_delete_and_failures_record_last_error() {
+        let db = temp_db();
+        let settings = WriteQueueSettings {
+            retry_sleep: std::time::Duration::from_millis(20),
+        };
+        // First transport fails everything: the row stays + last_error set.
+        let failing = Arc::new(ScriptedTransport::failing());
+        let queue = WriteQueue::open_with(
+            failing.clone(),
+            "https://api.retaindb.com",
+            "p",
+            &db,
+            settings,
+        )
+        .unwrap();
+        queue
+            .enqueue("u1", "s1", &json!([{ "role": "user", "content": "hi" }]))
+            .unwrap();
+        assert!(wait_for(|| !queue.pending_rows().is_empty()
+            && queue.pending_rows()[0].1.is_some()));
+        queue.shutdown();
+        assert_eq!(queue.pending_rows().len(), 1, "failed ingest stays pending");
+
+        // Reopen against a succeeding transport: the row replays and deletes.
+        let succeeding = Arc::new(ScriptedTransport::succeeding());
+        let queue2 = WriteQueue::open_with(
+            succeeding.clone(),
+            "https://api.retaindb.com",
+            "p",
+            &db,
+            WriteQueueSettings::default(),
+        )
+        .unwrap();
+        assert!(
+            wait_for(|| queue2.pending_rows().is_empty()),
+            "replayed row flushed"
+        );
+        let calls = succeeding.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "exactly the replayed ingest");
+        assert_eq!(calls[0].0, "POST");
+        assert_eq!(calls[0].1, "/v1/memory/ingest/session");
+        queue2.shutdown();
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn shutdown_is_idempotent_and_drops_further_enqueues() {
+        let db = temp_db();
+        let queue = WriteQueue::open(
+            Arc::new(ScriptedTransport::succeeding()),
+            "https://api.retaindb.com",
+            "p",
+            &db,
+        )
+        .unwrap();
+        queue.shutdown();
+        queue.shutdown(); // second call is a no-op
+        queue
+            .enqueue("u1", "s1", &json!([]))
+            .unwrap(); // dropped silently
+        assert!(queue.pending_rows().is_empty());
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn the_timestamp_column_is_iso_utc() {
+        let (y, mo, d, h, mi, s) = civil_from_unix(1_761_234_567); // 2025-10-23
+        assert_eq!(
+            format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}+00:00"),
+            "2025-10-23T15:49:27+00:00"
+        );
     }
 }
