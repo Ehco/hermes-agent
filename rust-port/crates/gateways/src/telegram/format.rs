@@ -44,7 +44,9 @@ pub fn strip_mdv2(text: &str) -> String {
             cleaned2.push_str(&cleaned[last..e]); // keep as-is
         } else {
             cleaned2.push_str(&cleaned[last..s]);
-            cleaned2.push_str(&m[1]);
+            // `m` is the whole `_…_` match; keep the inner text only.
+            let whole = m.as_str();
+            cleaned2.push_str(&whole[1..whole.len() - 1]);
         }
         last = e;
     }
@@ -120,7 +122,9 @@ fn protect_fenced(text: &str, ph: &mut Placeholders) -> String {
                 }
                 if let Some(close_idx) = close_idx {
                     let mut body = body.join("\n");
-                    body = body.replace('\\', "\\\\").replace('`', "\\`");
+                    // MarkdownV2 inside pre: escape \, ` and _ (the wave's
+                    // contract — see code_is_protected_from_escaping).
+                    body = body.replace('\\', "\\\\").replace('`', "\\`").replace('_', "\\_");
                     let opening = format!("{}{}{}", prefix, "```", lang_and_nl);
                     let stash = if body.is_empty() {
                         format!("{}{}{}", opening, "\n", lines[close_idx])
@@ -163,6 +167,8 @@ fn escape_bare_brackets_seg(seg: &str) -> String {
     let bytes = seg.as_bytes();
     let mut out = String::with_capacity(seg.len());
     let mut last = 0usize;
+    let mut in_link_url = false; // between a link's opening `(` and its close
+    let mut link_paren_depth = 0i64; // nesting inside the link URL
     for m in re.find_iter(seg) {
         let s = m.start();
         let ch = m.as_str().chars().next().unwrap();
@@ -177,7 +183,35 @@ fn escape_bare_brackets_seg(seg: &str) -> String {
         if ch == '(' && prev == Some(']') {
             out.push_str(&seg[last..=s]);
             last = m.end();
+            in_link_url = true;
+            link_paren_depth = 0;
             continue;
+        }
+        // Inside a link URL: parens stay unescaped — the URL was already
+        // escaped wholesale by the link pass (only `)` → `\)`).
+        if in_link_url {
+            match ch {
+                '(' => {
+                    link_paren_depth += 1;
+                    out.push_str(&seg[last..=s]);
+                    last = m.end();
+                    continue;
+                }
+                ')' if link_paren_depth > 0 => {
+                    link_paren_depth -= 1;
+                    out.push_str(&seg[last..=s]);
+                    last = m.end();
+                    continue;
+                }
+                ')' => {
+                    // Closes the link itself → keep, back to plain text.
+                    out.push_str(&seg[last..=s]);
+                    last = m.end();
+                    in_link_url = false;
+                    continue;
+                }
+                _ => {}
+            }
         }
         // Closes a link URL? Walk back matching parens depth.
         if ch == ')' {
@@ -257,6 +291,23 @@ pub fn format_message(content: &str) -> String {
         })
         .to_string();
 
+    // 4b) Expandable blockquotes open with "**> " — stash them before the
+    // bold/italic passes mangle the marker (blockquotes_protect_angle).
+    let xq_re = Regex::new(r"(?m)^\*\*> (.+)$").unwrap();
+    text = xq_re
+        .replace_all(&text, |m: &regex::Captures| {
+            let content = &m[1];
+            let (body, closer) = if let Some(b) = content.strip_suffix("||") {
+                (b, "||")
+            } else if let Some(b) = content.strip_suffix("**") {
+                (b, "**")
+            } else {
+                (content, "")
+            };
+            ph.add(format!("**> {}{}", escape_mdv2(body), closer))
+        })
+        .to_string();
+
     // 5) Bold **text** → *text*; 6) Italic *text* → _text_; 7) ~~strike~~ → ~text~;
     // 8) ||spoiler|| kept as-is.
     let bold_re = Regex::new(r"\*\*(.+?)\*\*").unwrap();
@@ -287,6 +338,10 @@ pub fn format_message(content: &str) -> String {
             let content = &m[2];
             if prefix.starts_with("**") && content.ends_with("||") {
                 ph.add(format!("{} {}||", prefix, escape_mdv2(&content[..content.len() - 2])))
+            } else if prefix.starts_with("**") && content.ends_with("**") {
+                // Expandable quote closed by the trailing ** — keep the marker
+                // verbatim (blockquotes_protect_angle).
+                ph.add(format!("{} {}**", prefix, escape_mdv2(&content[..content.len() - 2])))
             } else {
                 ph.add(format!("{} {}", prefix, escape_mdv2(content)))
             }
@@ -382,3 +437,4 @@ mod tests {
         assert_eq!(strip_mdv2("snake_case"), "snake_case");
     }
 }
+

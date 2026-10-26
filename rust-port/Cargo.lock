@@ -483,6 +483,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hermes-core",
+ "hermes-schedulers",
+ "hermes-skills",
  "regex",
  "reqwest",
  "serde",

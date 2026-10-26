@@ -6,14 +6,19 @@
 //! mirroring the Python `registry.dispatch` contract so the agent loop and
 //! the cli `ToolHost` can treat results opaquely.
 
+pub mod cronjob;
 pub mod edit;
 pub mod html_text;
 pub mod image_generate;
 pub mod list_dir;
+pub mod memory;
 pub mod read_file;
 pub mod registry;
 pub mod search;
+pub mod session_search;
+pub mod skills;
 pub mod terminal;
+pub mod todo_list;
 pub mod util;
 pub mod web_common;
 pub mod web_extract;

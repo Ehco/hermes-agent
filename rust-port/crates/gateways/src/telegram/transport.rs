@@ -82,7 +82,7 @@ impl<B: HttpBackend> TelegramTransport<B> {
             params["message_thread_id"] = json!(t);
         }
         let plain_params = || {
-            let mut p = json!({ "chat_id": chat_id, "text": text });
+            let mut p = json!({ "chat_id": chat_id, "text": format::strip_mdv2(text) });
             if let Some(t) = thread_id {
                 p["message_thread_id"] = json!(t);
             }
@@ -217,6 +217,11 @@ fn normalize_update(update: &Value) -> Option<InboundMessage> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    if text.is_empty() {
+        // Non-text updates (photos without caption, stickers, …) are dropped —
+        // only a person speaking wakes the agent.
+        return None;
+    }
     let from = msg.get("from");
     let user_id = from
         .and_then(|f| f.get("id").and_then(Value::as_i64))
@@ -319,7 +324,9 @@ mod tests {
         let msgs2 = GatewayTransport::poll(&mut t).await.unwrap();
         assert!(msgs2.is_empty());
         let calls = handle.calls();
-        let second = calls.iter().find(|(u, _)| u.ends_with("/getUpdates")).unwrap();
+        // The LAST getUpdates call carries the advanced offset (the first poll
+        // legitimately starts at 0).
+        let second = calls.iter().rev().find(|(u, _)| u.ends_with("/getUpdates")).unwrap();
         assert_eq!(second.1["offset"], 44);
         assert_eq!(second.1["timeout"], POLL_TIMEOUT_SECS);
         // Long-poll state machine: no re-delivery of update 41 (offset monotonic).
@@ -330,7 +337,15 @@ mod tests {
     async fn send_reply_chunks_at_utf16_cap_and_uses_markdownv2() {
         let long = "\u{1F600}".repeat(3000); // 6000 UTF-16 units > 4096
         let sent = json!({ "ok": true, "result": { "message_id": 99 } });
-        let (stub, handle) = StubApi::new(vec![("sendMessage".into(), sent)]);
+        // Emojis carry no markdown, so the formatted chunks are the raw chunks:
+        // one canned OK per chunk (generous margin).
+        let (stub, handle) = StubApi::new(vec![
+            ("sendMessage".into(), sent.clone()),
+            ("sendMessage".into(), sent.clone()),
+            ("sendMessage".into(), sent.clone()),
+            ("sendMessage".into(), sent.clone()),
+            ("sendMessage".into(), sent.clone()),
+        ]);
         let t = TelegramTransport::new(stub, "TOKEN");
         let out = GatewayTransport::send_reply(&t, "55", &long, None).await.unwrap();
         assert!(out.chunks >= 2);

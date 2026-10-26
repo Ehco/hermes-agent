@@ -34,7 +34,7 @@ impl Platform {
 ///
 /// This is the payload the gateway feeds to the agent loop to run a turn; the
 /// reply goes back through [`GatewayTransport::send_reply`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboundMessage {
     pub platform: Platform,
     /// Platform-native chat/channel identifier (Telegram chat id, Discord

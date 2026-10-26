@@ -14,3 +14,8 @@ regex = "1"
 # `blocking` drives the sync `execute()` entry points off the registry's
 # spawn_blocking path without needing async plumbing through every tool.
 reqwest = { workspace = true, features = ["blocking"] }
+# Wrappers: the memory tool wraps the skills crate's MemoryStore and the
+# skills tools wrap its skill catalog; cronjob_manage wraps the schedulers'
+# JobStore (no reimplementation of either).
+hermes-skills = { path = "../skills" }
+hermes-schedulers = { path = "../schedulers" }

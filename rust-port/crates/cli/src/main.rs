@@ -5,19 +5,18 @@
 //! session store so a restart resumes where it left off.
 
 use anyhow::{anyhow, Result};
-use futures::StreamExt;
-use hermes_core::agent::ToolHost;
 use hermes_core::config::ProviderConfig;
-use hermes_core::model::{Content, Message, Role, ToolSpec};
-use hermes_core::transport::{StreamItem, Transport};
+use hermes_core::model::{Message, Role};
 use hermes_session::SessionStore;
-use serde_json::{json, Value};
-use std::future::Future;
-use std::io::{BufRead, Write};
+use repl::Repl;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
+mod multiline;
+mod repl;
+mod session_switch;
+mod slash;
 mod tool_bridge;
-use tool_bridge::bridge;
 
 // ─── CLI flags ───────────────────────────────────────────────────────────────
 
@@ -47,7 +46,7 @@ impl Flags {
                 "--config" => f.config = Some(take()?),
                 "--session" => f.session = Some(take()?),
                 "--help" | "-h" => {
-                    print_help();
+                    print_flags_help();
                     std::process::exit(0);
                 }
                 other => return Err(anyhow!("unknown flag {other} (try --help)")),
@@ -57,7 +56,7 @@ impl Flags {
     }
 }
 
-fn print_help() {
+fn print_flags_help() {
     println!(
         "hermes-rs — Rust port of the hermes-agent CLI\n\n\
          FLAGS:\n\
@@ -69,125 +68,8 @@ fn print_help() {
          \x20 --api-key <key>      inline API key (env var still wins)\n\
          \x20 --session <path>     JSONL session file (default ~/.hermes/sessions/cli-rs.jsonl)\n\n\
          SLASH COMMANDS:\n\
-         \x20 /help  show commands\n\
-         \x20 /new   clear the session history\n\
-         \x20 /quit  exit"
+         \x20 type /help inside the REPL for the command table"
     );
-}
-
-// ─── Tool host: delegates into the hermes-tools registry via tool_bridge ─────
-
-pub struct CliToolHost;
-
-/// The JSON Schemas for the tools the bridge implements.
-pub fn tool_specs() -> Vec<ToolSpec> {
-    vec![
-        ToolSpec {
-            name: "terminal".into(),
-            description: "Run a shell command and return its output.".into(),
-            schema: json!({
-                "type": "object",
-                "properties": {"command": {"type": "string"}},
-                "required": ["command"],
-            }),
-        },
-        ToolSpec {
-            name: "read_file".into(),
-            description: "Read a text file (1-indexed line numbers).".into(),
-            schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "offset": {"type": "integer"},
-                    "limit": {"type": "integer"},
-                },
-                "required": ["path"],
-            }),
-        },
-        ToolSpec {
-            name: "list_dir".into(),
-            description: "List a directory's entries with sizes.".into(),
-            schema: json!({
-                "type": "object",
-                "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}},
-            }),
-        },
-    ]
-}
-
-impl ToolHost for CliToolHost {
-    fn execute(&self, name: &str, arguments: &str) -> impl Future<Output = Result<String>> + Send {
-        let name = name.to_string();
-        async move {
-            let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
-            Ok(bridge(&name, &args))
-        }
-    }
-}
-
-// ─── Streaming turn loop (same contract as core::agent::run_turn, but with
-//     live output of text deltas as they arrive) ─────────────────────────────
-
-async fn run_turn_live(
-    transport: &dyn Transport,
-    tools: &[ToolSpec],
-    history: &mut Vec<Message>,
-    store: &SessionStore,
-) -> Result<String> {
-    loop {
-        let mut stream = transport.stream(history, tools)?;
-        let mut text = String::new();
-        let mut calls: Vec<(String, String, String)> = Vec::new();
-
-        while let Some(item) = stream.next().await {
-            match item? {
-                StreamItem::TextDelta(d) => {
-                    print!("{d}");
-                    std::io::stdout().flush().ok();
-                    text.push_str(&d);
-                }
-                StreamItem::ToolCall { id, name, arguments } => {
-                    calls.push((id, name, arguments));
-                }
-                StreamItem::Done => break,
-            }
-        }
-        println!();
-
-        let mut assistant = Message { role: Role::Assistant, content: Vec::new() };
-        if !text.is_empty() {
-            assistant.content.push(Content::Text { text: text.clone() });
-        }
-        for (id, name, arguments) in &calls {
-            assistant.content.push(Content::ToolUse {
-                call: hermes_core::ToolCall {
-                    id: id.clone(),
-                    name: name.clone(),
-                    arguments: arguments.clone(),
-                },
-            });
-        }
-        store.append(&assistant)?;
-        history.push(assistant);
-
-        if calls.is_empty() {
-            return Ok(text);
-        }
-
-        let host = CliToolHost;
-        for (id, name, arguments) in calls {
-            let output = host
-                .execute(&name, &arguments)
-                .await
-                .unwrap_or_else(|e| format!("tool error: {e}"));
-            let msg = Message {
-                role: Role::Tool,
-                content: vec![Content::ToolResult { call_id: id, output }],
-            };
-            store.append(&msg)?;
-            history.push(msg);
-        }
-    }
 }
 
 // ─── REPL ─────────────────────────────────────────────────────────────────────
@@ -233,7 +115,7 @@ async fn run() -> Result<()> {
     if let Some(k) = &flags.api_key { cfg.api_key = Some(k.clone()); }
 
     let transport = cfg.build_transport()?;
-    let tools = tool_specs();
+    let tools = repl::tool_specs();
 
     let store = SessionStore::open(session_path(&flags))?;
     let mut history: Vec<Message> = store.load()?;
@@ -253,43 +135,17 @@ async fn run() -> Result<()> {
         history.len(),
     );
 
-    let stdin = std::io::stdin();
-    let mut input = String::new();
-    loop {
-        print!("› ");
-        std::io::stdout().flush().ok();
-        input.clear();
-        if stdin.lock().read_line(&mut input)? == 0 {
-            break; // EOF
-        }
-        let line = input.trim();
-        match line {
-            "" => continue,
-            "/quit" | "/exit" | "/q" => break,
-            "/help" => print_help(),
-            "/new" => {
-                store.clear()?;
-                history.clear();
-                history.push(Message::text(Role::System, SYSTEM_PROMPT));
-                println!("(new session)");
-                continue;
-            }
-            slash if slash.starts_with('/') => {
-                println!("unknown command {slash} — try /help");
-                continue;
-            }
-            user_input => {
-                let user = Message::text(Role::User, user_input);
-                store.append(&user)?;
-                history.push(user);
-                if let Err(e) = run_turn_live(&*transport, &tools, &mut history, &store).await {
-                    eprintln!("\nerror: {e:#}");
-                }
-            }
-        }
-    }
-    println!("bye");
-    Ok(())
+    let io: Arc<Mutex<dyn repl::ReplIo>> = Arc::new(Mutex::new(repl::StdinIo));
+    let mut repl = Repl::new(
+        io,
+        transport,
+        tools,
+        store,
+        history,
+        cfg.model.clone(),
+        SYSTEM_PROMPT.into(),
+    );
+    repl.run().await
 }
 
 #[tokio::main]
