@@ -15,9 +15,22 @@ use crate::frontmatter::{parse_frontmatter, truncate_description, truncate_name}
 /// VCS/dependency/cache directories skill scanners always skip
 /// (`agent/skill_utils.py::EXCLUDED_SKILL_DIRS`).
 pub const EXCLUDED_SKILL_DIRS: &[&str] = &[
-    ".git", ".github", ".hub", ".archive", ".curator_backups", ".locks", ".venv", "venv",
-    "node_modules", "site-packages", "__pycache__", ".tox", ".nox", ".pytest_cache",
-    ".mypy_cache", ".ruff_cache",
+    ".git",
+    ".github",
+    ".hub",
+    ".archive",
+    ".curator_backups",
+    ".locks",
+    ".venv",
+    "venv",
+    "node_modules",
+    "site-packages",
+    "__pycache__",
+    ".tox",
+    ".nox",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
 ];
 
 /// Progressive-disclosure support dirs inside a skill package: loaded
@@ -73,7 +86,9 @@ fn iter_skill_index_files(root: &Path) -> Vec<PathBuf> {
         };
         let mut names: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
         names.sort();
-        let has_skill_md = names.iter().any(|p| p.file_name().map_or(false, |n| n == "SKILL.md"));
+        let has_skill_md = names
+            .iter()
+            .any(|p| p.file_name().map_or(false, |n| n == "SKILL.md"));
         for path in names {
             if path.is_dir() {
                 let name = path.file_name().map(|n| n.to_string_lossy().to_string());
@@ -161,6 +176,49 @@ pub fn discover_skills(root: &Path) -> Vec<SkillMeta> {
     sort_skills(skills)
 }
 
+/// Resolve the optional-skills catalog root: `$HERMES_OPTIONAL_SKILLS` when
+/// set and non-empty, else the crate's embedded `optional/` copy (the verbatim
+/// port of the Python repo's `optional-skills/`). The compile-time
+/// `CARGO_MANIFEST_DIR` path serves in-repo runs and `cargo test`; packaged
+/// builds set the env var. `None` when neither exists.
+pub fn optional_skills_root() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("HERMES_OPTIONAL_SKILLS") {
+        if !dir.trim().is_empty() {
+            return Some(PathBuf::from(dir));
+        }
+    }
+    let embedded = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("optional");
+    embedded.is_dir().then_some(embedded)
+}
+
+/// `discover_skills` over the active root plus the optional-skills catalog,
+/// optional rows after active rows and an active copy of the same skill name
+/// shadowing the optional one (hub-catalog vs installed tiering, as on the
+/// Python side). Parse failures are skipped, as in `discover_skills`.
+pub fn discover_skills_with_optional(root: &Path) -> Vec<SkillMeta> {
+    let mut skills = discover_skills(root);
+    if let Some(optional) = optional_skills_root() {
+        let active: std::collections::HashSet<String> = skills
+            .iter()
+            .map(|meta| meta.name.clone())
+            .collect();
+        for meta in discover_skills(&optional) {
+            if !active.contains(&meta.name) {
+                skills.push(meta);
+            }
+        }
+    }
+    sort_skills(skills)
+}
+
+/// `locate_skill` with the optional-skills catalog as a fallback root: the
+/// active root wins, else the skill is looked up under the optional root so
+/// `skill_view` and linked-file serving work against the real skill dir.
+pub fn locate_skill_with_optional(root: &Path, name: &str) -> Option<PathBuf> {
+    locate_skill(root, name)
+        .or_else(|| optional_skills_root().and_then(|opt| locate_skill(&opt, name)))
+}
+
 /// Keep every skill listing ordered the same way: `(category or "", name)`.
 pub fn sort_skills(skills: Vec<SkillMeta>) -> Vec<SkillMeta> {
     let mut skills = skills;
@@ -178,20 +236,21 @@ pub fn sort_skills(skills: Vec<SkillMeta>) -> Vec<SkillMeta> {
 /// *name* (the `skill_view` lookup over the same walk the catalog uses).
 /// Ties keep the lexically first path, so the result is deterministic.
 pub fn locate_skill(root: &Path, name: &str) -> Option<PathBuf> {
-    iter_skill_index_files(root)
-        .into_iter()
-        .find(|skill_md| {
-            let raw = fs::read_to_string(skill_md).unwrap_or_default();
-            let (frontmatter, _body) =
-                parse_frontmatter(raw.chars().take(4000).collect::<String>().as_str());
-            let declared = frontmatter.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            declared == name
-                || skill_md
-                    .parent()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n == name)
-                    .unwrap_or(false)
-        })
+    iter_skill_index_files(root).into_iter().find(|skill_md| {
+        let raw = fs::read_to_string(skill_md).unwrap_or_default();
+        let (frontmatter, _body) =
+            parse_frontmatter(raw.chars().take(4000).collect::<String>().as_str());
+        let declared = frontmatter
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        declared == name
+            || skill_md
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n == name)
+                .unwrap_or(false)
+    })
 }
 
 /// Linked files of a directory skill, keyed references → templates → assets →
@@ -260,9 +319,12 @@ fn collect_matches(
 
 /// Load a skill's full content plus its linked-files listing by name — the
 /// `skill_view` happy path. Returns `(SKILL.md text, linked_files)`.
-pub fn load_skill(root: &Path, name: &str) -> anyhow::Result<(String, BTreeMap<String, Vec<String>>)> {
-    let skill_md = locate_skill(root, name)
-        .ok_or_else(|| anyhow::anyhow!("Skill '{name}' not found."))?;
+pub fn load_skill(
+    root: &Path,
+    name: &str,
+) -> anyhow::Result<(String, BTreeMap<String, Vec<String>>)> {
+    let skill_md =
+        locate_skill(root, name).ok_or_else(|| anyhow::anyhow!("Skill '{name}' not found."))?;
     let content = fs::read_to_string(&skill_md)
         .map_err(|e| anyhow::anyhow!("Failed to read skill '{name}': {e}"))?;
     let dir = skill_md

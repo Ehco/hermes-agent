@@ -16,7 +16,9 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 use hermes_skills::frontmatter::parse_frontmatter;
-use hermes_skills::skills::{discover_skills, linked_files, locate_skill};
+use hermes_skills::skills::{
+    discover_skills_with_optional, linked_files, locate_skill, locate_skill_with_optional,
+};
 
 /// Skills root: `$HERMES_SKILLS_DIR`, else `$HERMES_HOME/skills`, else
 /// `~/.hermes/skills`.
@@ -44,10 +46,15 @@ pub fn execute_list(args: &Value) -> String {
     execute_list_in(&skills_root(), args)
 }
 
-/// `execute_list` against an explicit root (tests, embedding hosts).
+/// `execute_list` against an explicit root (tests, embedding hosts). The
+/// optional-skills catalog (`hermes_skills::optional_skills_root`) is merged
+/// behind the root, active copies shadowing optional ones of the same name;
+/// optional rows carry `"source": "optional"` and their category relative to
+/// the optional root.
 pub fn execute_list_in(root: &Path, args: &Value) -> String {
     let category = args.get("category").and_then(Value::as_str).unwrap_or("");
-    let rows: Vec<Value> = discover_skills(root)
+    let optional_root = hermes_skills::skills::optional_skills_root();
+    let rows: Vec<Value> = discover_skills_with_optional(root)
         .into_iter()
         .filter(|meta| category.is_empty() || meta.category.as_deref() == Some(category))
         .map(|meta| {
@@ -60,6 +67,14 @@ pub fn execute_list_in(root: &Path, args: &Value) -> String {
                 row.as_object_mut()
                     .unwrap()
                     .insert("category".into(), Value::String(category.clone()));
+            }
+            if optional_root
+                .as_ref()
+                .is_some_and(|opt| meta.path.starts_with(opt))
+            {
+                row.as_object_mut()
+                    .unwrap()
+                    .insert("source".into(), Value::String("optional".into()));
             }
             row
         })
@@ -83,7 +98,7 @@ pub fn execute_view_in(root: &Path, args: &Value) -> String {
         return crate::util::tool_error("skill_view: 'name' is required");
     };
     let file_path = args.get("file_path").and_then(Value::as_str);
-    let Some(skill_md) = locate_skill(root, name) else {
+    let Some(skill_md) = locate_skill_with_optional(root, name) else {
         return crate::util::tool_error(&format!(
             "Skill '{name}' not found. Use skills_list to see the available skills."
         ));
@@ -104,9 +119,14 @@ pub fn execute_view_in(root: &Path, args: &Value) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let rel_path = skill_md
-        .strip_prefix(root)
-        .unwrap_or(&skill_md)
+    // Path relative to the root that owns the skill (the active root, or the
+    // optional-skills catalog when served from it).
+    let owned_by_root = skill_md.strip_prefix(root).ok().map(Path::to_path_buf);
+    let owned_by_optional = hermes_skills::skills::optional_skills_root()
+        .and_then(|opt| skill_md.strip_prefix(&opt).ok().map(Path::to_path_buf));
+    let rel_path = owned_by_root
+        .or(owned_by_optional)
+        .unwrap_or_else(|| skill_md.clone())
         .display()
         .to_string();
     let files = linked_files(&skill_dir);
@@ -242,19 +262,34 @@ mod tests {
             "Strip AI-isms from text.",
         );
         let out = v(&execute_list_in(&root, &json!({})));
-        assert_eq!(out["count"], 2);
-        let names: Vec<&str> = out["skills"]
+        // The optional-skills catalog merges behind the active root; the
+        // active rows are asserted here (optional rows carry source=optional).
+        let active: Vec<&Value> = out["skills"]
             .as_array()
             .unwrap()
+            .iter()
+            .filter(|s| s.get("source").is_none())
+            .collect();
+        assert!(out["count"].as_u64().unwrap() >= 2);
+        let names: Vec<&str> = active
             .iter()
             .map(|s| s["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"deploy") && names.contains(&"humanizer"));
 
-        let out = v(&execute_list_in(&root, &json!({"category": "devops"})));
-        assert_eq!(out["count"], 1);
-        assert_eq!(out["skills"][0]["name"], "deploy");
-        assert_eq!(out["skills"][0]["category"], "devops");
+        let out = v(&execute_list_in(
+            &root,
+            &json!({ "category": "devops" }),
+        ));
+        let devops: Vec<&Value> = out["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s.get("source").is_none())
+            .collect();
+        assert_eq!(devops.len(), 1);
+        assert_eq!(devops[0]["name"], "deploy");
+        assert_eq!(devops[0]["category"], "devops");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -333,6 +368,48 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Skill 'nope' not found"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn list_merges_the_optional_catalog_and_marks_optional_rows() {
+        // No active skills at all: the merged catalog is the optional one.
+        let root = tmp_root();
+        let out = v(&execute_list_in(&root, &json!({})));
+        let skills = out["skills"].as_array().unwrap();
+        assert!(out["count"].as_u64().unwrap() >= 150, "{}", out["count"]);
+        let optional: Vec<&Value> = skills
+            .iter()
+            .filter(|s| s["source"].as_str() == Some("optional"))
+            .collect();
+        assert_eq!(optional.len(), skills.len(), "every row is optional here");
+        let names: Vec<&str> = optional
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"ascii-art"));
+        let ascii = optional.iter().find(|s| s["name"] == "ascii-art").unwrap();
+        assert_eq!(ascii["category"], "creative");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn view_falls_back_to_the_optional_catalog() {
+        let root = tmp_root(); // empty active root
+        let out = v(&execute_view_in(&root, &json!({"name": "ascii-art"})));
+        assert_eq!(out["success"], true);
+        assert!(out["content"]
+            .as_str()
+            .unwrap()
+            .contains("ASCII art"));
+        // The path is relative to the optional root, and linked files resolve
+        // against the real skill dir.
+        let out = v(&execute_view_in(
+            &root,
+            &json!({"name": "antigravity-cli", "file_path": "references/cli-docs.md"}),
+        ));
+        assert_eq!(out["success"], true);
+        assert!(out["content"].as_str().unwrap().contains("Antigravity"));
         let _ = fs::remove_dir_all(&root);
     }
 

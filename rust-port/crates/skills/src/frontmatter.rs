@@ -142,7 +142,9 @@ pub fn validate_skill_doc(doc: &SkillDoc) -> Vec<String> {
                 "name '{name}' exceeds {MAX_NAME_LENGTH} chars (MAX_NAME_LENGTH)"
             ));
         }
-        if !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
             || !name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
         {
             errors.push(format!(
@@ -177,13 +179,18 @@ mod tests {
         .unwrap();
         let doc = parse_skill_doc(&raw);
         assert_eq!(doc.name(), "gif-search");
-        assert_eq!(doc.description(), "Search/download GIFs from Tenor via curl + jq.");
+        assert_eq!(
+            doc.description(),
+            "Search/download GIFs from Tenor via curl + jq."
+        );
         assert!(doc.body.trim_start().starts_with("# GIF Search"));
         assert!(validate_skill_doc(&doc).is_empty());
         // nested metadata survives YAML parsing
         let meta = doc.frontmatter.get("metadata").unwrap();
         let meta = meta.as_mapping().unwrap();
-        let hermes = meta.get(serde_yaml::Value::String("hermes".into())).unwrap();
+        let hermes = meta
+            .get(serde_yaml::Value::String("hermes".into()))
+            .unwrap();
         let hermes = hermes.as_mapping().unwrap();
         let tags = hermes
             .get(serde_yaml::Value::String("tags".into()))
@@ -204,10 +211,7 @@ mod tests {
     fn bom_is_stripped_before_fence_check() {
         let raw = "\u{feff}---\nname: test-skill\n---\n\nBody here.\n";
         let (fm, body) = parse_frontmatter(raw);
-        assert_eq!(
-            fm.get("name").and_then(|v| v.as_str()),
-            Some("test-skill")
-        );
+        assert_eq!(fm.get("name").and_then(|v| v.as_str()), Some("test-skill"));
         assert_eq!(body, "\nBody here.\n");
     }
 
@@ -215,7 +219,10 @@ mod tests {
     fn malformed_yaml_falls_back_to_key_value_splitting() {
         let raw = "---\nname: broken-skill\ndescription: no closing quote \"\n---\n\nBody.\n";
         let (fm, _) = parse_frontmatter(raw);
-        assert_eq!(fm.get("name").and_then(|v| v.as_str()), Some("broken-skill"));
+        assert_eq!(
+            fm.get("name").and_then(|v| v.as_str()),
+            Some("broken-skill")
+        );
         assert_eq!(
             fm.get("description").and_then(|v| v.as_str()),
             Some("no closing quote \"")
@@ -249,7 +256,9 @@ mod tests {
             "---\nname: {}\ndescription: d\n---\n\nbody\n",
             "a".repeat(80)
         ));
-        assert!(validate_skill_doc(&doc).iter().any(|e| e.contains("64 chars")));
+        assert!(validate_skill_doc(&doc)
+            .iter()
+            .any(|e| e.contains("64 chars")));
 
         let doc = parse_skill_doc("---\nname: ok\ndescription: d\n---\n");
         assert!(validate_skill_doc(&doc).iter().any(|e| e.contains("body")));

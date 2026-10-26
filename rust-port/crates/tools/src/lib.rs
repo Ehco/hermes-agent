@@ -48,6 +48,11 @@ pub mod set_theme;
 pub mod setup_beat;
 pub mod show_tip;
 pub mod skills;
+// Voice: cloud-STT provider HTTP contracts (transcription_cloud.py slice) and
+// the RetainDB dialectic-modeling core — both over injected HTTP seams, so no
+// registry entries (registry stays closed at 89) and no live network in tests.
+pub mod retaindb;
+pub mod transcription;
 pub mod terminal;
 pub mod todo_list;
 pub mod tool_search;

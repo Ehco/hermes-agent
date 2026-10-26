@@ -10,6 +10,11 @@ User approved unattended operation: when a wave completes, the session owner
    (blobs → tree with base_tree → commit → PATCH ref; `git push` hangs in this
    environment). Verify the pushed tree by re-fetching it cache-busted.
 4. Update THIS file (move wave from queue to ledger, append next).
+4b. Runnable-checkpoint duty (user-added 2026-10-26): after each wave,
+   cargo build --release -p hermes-tui -p hermes-gateway, refresh the desktop
+   launcher (C:\Users\Administrator\hermes-rs\rusted-hermes.cmd + Desktop
+   shortcut "Rusted Hermes" via make-shortcut.ps1), smoke-test the release
+   binary, and note run blockers here.
 5. Immediately dispatch the next wave (one agent at a time) and end turn.
 Stop and ask the user only for: credentials/secrets, killing non-agent
 processes, or a genuine design fork. Never print the GitHub token
@@ -94,11 +99,131 @@ Deferred with reasons:
   store is a single JSONL transcript — the three shapes (discover/scroll/
   browse) are already ported and stay as-is.
 
+## W14 — tools batch 6
+execute_code (full programmatic tool calling kernel: stdin JSON-cell wire
+protocol with per-kernel sentinel, loopback tool-RPC server with token +
+whitelist + per-cell budget, sandbox hermes_tools.py stub generator,
+persistent per-owner kernels, kernel-died/hint result shapes),
+desktop_project (ProjectsStore trait, projects.json fallback),
+video_generate, send_message, react_to_message (tapback semantics),
+manage_connections, manage_catalog, gui_tour. Registry now 41 tools.
+Pushed: head b469bf674e23. Workspace: 623 tests, 0 failures. First release
+build + "Rusted Hermes" desktop shortcut created (rusted-hermes.cmd +
+make-shortcut.ps1, smoke-tested).
+
+- W14: tools batch 6 — execute_code (full programmatic tool calling kernel),
+  desktop_project, video_generate, send_message, react_to_message,
+  manage_connections, manage_catalog, gui_tour. head b469bf674e23. 623 tests,
+  registry 41 tools. First release build + "Rusted Hermes" desktop shortcut.
+- W15: tools batch 7 — registry PARITY: 33 more tools (vision/video/feishu/
+  computer_use/browser family/discord/yuanbao), 74 registered. Only the 15
+  kanban_* tools deferred (kanban-mode subsystem). head 2eeddcbfe529.
+  12 crates, 669 tests, 172 branch files.
+
+- W16: UPSTREAM SYNC (~230 commits reviewed, upstream daec3cd4c6): ported
+  tool_search step-3 retry semantics, memory batch would_empty guard,
+  60-char skill-description budget; full mapping in SYNC.md. head
+  f2009737bdd9. 672 tests, 173 branch files.
+
+## W17 — kanban subsystem: REGISTRY CLOSED
+All 15 kanban_* tools with byte-frozen schemas, Python-identical errors,
+worker-ownership enforcement, mode gating; board-state layer (atomic-write
+board.json per board, statuses/links/runs/comments/events/attachments/
+heartbeat/claim, recompute_ready, snapshot-rollback). Schema parity enforced
+by a checked-in Python-dump diff test (caught 7 drifts). Deviations:
+SQLite -> atomic JSON board doc; profile toolset gate -> HERMES_KANBAN_TOOLSET env.
+Pushed: head aff0c67d04f7. Workspace: 688 tests, 0 failures. Registry: 89 tools
+= FULL PARITY with tools/registry.py. Release build + shortcut refreshed, smoke-tested.
+
+- W18: backlog lanes — Discord wss over rustls (WsStream enum, webpki-roots,
+  loopback TLS round-trip test), Slack files_upload_v2 3-step + transient
+  retry, MCP server-side expose mode (`hermes-rs --serve-mcp` over the full
+  registry, live duplex verified). head 19767afc771e. 703 tests, 180 files.
+
 ## Queue (next → later; one agent per wave)
-1. W12 desktop spawn wiring: launch the Rust binary instead of Python
-   (scratch clone of apps/desktop; never touch the live repo's checkout).
+1. W19 (next): optional-skills content port (optional-skills/ → a skills
+   content crate/dir the discovery layer picks up) + voice/Honcho
+   deferral re-assessment.
+
+## W19 — optional-skills content + voice/Honcho re-assessment
+1. Optional-skills CONTENT: the Python repo's optional-skills/ tree copied
+   VERBATIM into crates/skills/optional/ (152 SKILL.md packages, 854 files,
+   14MB; category/<skill>/ layout preserved; upstream daec3cd4c6). Wired as a
+   fallback root: hermes_skills::optional_skills_root() resolves
+   $HERMES_OPTIONAL_SKILLS, else the embedded optional/ (CARGO_MANIFEST_DIR —
+   works in-repo/cargo test; packaged builds set the env var).
+   discover_skills_with_optional() merges the catalog BEHIND the active
+   skills root (an active copy of the same name shadows the optional one —
+   hub-catalog vs installed tiering, as on the Python side);
+   locate_skill_with_optional() gives skill_view the fallback; tools-level
+   skills_list marks optional rows "source": "optional". Registry untouched
+   (closed at 89). See crates/skills/optional/README.md.
+2. Voice transcription RE-ASSESSMENT: the cloud-STT provider HTTP contracts
+   ported to crates/tools/src/transcription.rs over an injected
+   MultipartTransport — shared result envelopes (_ok_result/_error_result/
+   no_speech), the transcript-text normalizer (_extract_transcript_text:
+   string | {text} | {error} | Voxtral <asr_text> prefix, the #78098 rule),
+   the language ladder (_resolve_stt_language), xAI model normalization +
+   /v1/stt request contract (model always named; format gated on language;
+   diarize default off), ElevenLabs /speech-to-text contract (model_id,
+   lowercase-stringified bools, language_code omitted when blank,
+   detail.message error extraction), and the shared _rest_provider flow
+   (non-200 → "<label> API error (HTTP n): detail" with 300-char fallback;
+   empty text → no_speech). STILL Python-side (the deferral's remaining
+   substance): local backends (faster-whisper/local command/streaming),
+   audio transcoding, the OpenAI/groq/mistral SDK-shaped paths, xAI OAuth
+   credential resolution, and the voice_mode/voice_live host loops — all
+   local-audio or SDK-entangled, not portable without an audio stack.
+3. Honcho dialectic RE-ASSESSMENT: the deferred subsystem is today's
+   RetainDB memory plugin (Honcho's successor; hermes_cli/profiles_honcho.py
+   is just a config-file rename helper). Portable core ported to
+   crates/tools/src/retaindb.rs over an injected RetainDbTransport: the
+   dialectic/agent-self-model HTTP contracts (ask_user →
+   POST /v1/memory/profile/{user}/ask with {project, query,
+   reasoning_level}; get_agent_model/seed_agent_identity →
+   /v1/memory/agent/{id}/{model,seed}; get_profile →
+   /v1/memory/profile/{user}?project&include_pending), the reasoning-level
+   ladder (<120 low / <400 medium / else high), agent-model gating
+   (memory_count > 0), the prefetch cache semantics (queue_prefetch fills;
+   prefetch() consumes exactly once and clears), the agent self-model block
+   formatting (_AGENT_MODEL_FIELDS) and the context-overlay builder
+   (_build_overlay + _compact/_norm: 320-char compaction, top-5 each,
+   cross-dedupe against local entries). Still unported (the original
+   entanglement holds): the MemoryProvider lifecycle, the SQLite
+   write-behind queue, the shared file store, and the ten retaindb_* tool
+   schemas — they need the memory-provider/plugin-host abstraction the Rust
+   port doesn't have. Both modules are seam-injected and registry-free (no
+   network in tests); hermes-tools + hermes-skills green, full workspace
+   build/test run in this wave.
+
+## Verification totals
+- W17 push: 688 tests / 0 failures, 12 crates, build clean. Branch files: 179.
+  REGISTRY CLOSED at 89 tools — full parity with tools/registry.py.
+  Release binaries rebuilt; shortcut live (smoke-tested).
+
+## How to run locally today (HERMES_HOME points at the real profile)
+  export PATH="/c/msys64/mingw64/bin:$HOME/.cargo/bin:$PATH"
+  export HERMES_HOME="/c/Users/Administrator/AppData/Local/hermes"
+  cd /c/Users/Administrator/hermes-rs
+  cargo run --release -p hermes-cli     # line REPL
+  cargo run --release -p hermes-tui     # full-screen TUI
+  cargo run --release -p hermes-gateway # desktop API server (/api/ws)
+  (config.yaml/model keys are read from $HERMES_HOME/config.yaml)
+- Done extra: W13 tools batch 5 — desktop-ui bridge tools (clarify,
+  set_theme, focus_pane, show_tip, read_terminal, read_window_below,
+  desktop_preview, drive_preview, annotate_preview) behind an injected
+  DesktopUi trait; registry at 33 tools. head 22446aa0a80e. 574 tests.
+- Done extra: W12b desktop spawn wiring — branch desktop-spawn-rust
+  (commit c526080d60e8): HERMES_AGENT_BIN override in electron main
+  (Python default unchanged), agent-bin decision logic + 5 vitest tests,
+  REST ws-ticket mint branch; Rust-side hermes-gateway binary implementing
+  `gateway ensure --json` (crates/gateway/src/main.rs, also on rust-port
+  head c1d48b2492d0, patch archived at desktop-spawn-rust.patch). Verified:
+  tsc clean, vitest 28 passed, live cold-start + warm attach + ticket +
+  WS 101. 12 crates, 525 tests.
 - Backlog: long-tail tools until registry parity; Discord TLS+wss; Slack
   admin/file lanes; MCP server side; optional-skills content.
 
 ## Verification totals
-- W11 push: 522 tests / 0 failures, 11 crates, build clean. Branch files: 143.
+- W15 push: 669 tests / 0 failures, 12 crates, build clean. Branch files: 172.
+  REGISTRY PARITY reached (74/83 Python tools; kanban_* subsystem deferred).

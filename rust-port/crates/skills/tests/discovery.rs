@@ -56,7 +56,10 @@ fn discovers_real_fixtures_with_categories_and_deterministic_order() {
     // sorted by (category, name): apple < media
     assert_eq!(skills[0].name, "apple-notes");
     assert_eq!(skills[0].category.as_deref(), Some("apple"));
-    assert_eq!(skills[0].description, "Manage Apple Notes via memo CLI: create, search, edit.");
+    assert_eq!(
+        skills[0].description,
+        "Manage Apple Notes via memo CLI: create, search, edit."
+    );
     assert_eq!(skills[1].name, "gif-search");
     assert_eq!(skills[1].category.as_deref(), Some("media"));
     assert!(skills[0].path.ends_with("apple-notes/SKILL.md"));
@@ -68,20 +71,42 @@ fn discovery_excludes_support_and_excluded_dirs_and_falls_back() {
     let root = tmp_root("walk");
     // category/skill with NO frontmatter name -> dir-name fallback and
     // first-non-heading-body-line description fallback (description omitted).
-    write(&root, "tools/my-tool/SKILL.md", "---\n---\n\n# Heading\nFirst useful line.\n");
+    write(
+        &root,
+        "tools/my-tool/SKILL.md",
+        "---\n---\n\n# Heading\nFirst useful line.\n",
+    );
     // flat skill (root-level dir) -> category None
-    write(&root, "flat-one/SKILL.md", "---\nname: flat-one\ndescription: flat\n---\n\nbody\n");
+    write(
+        &root,
+        "flat-one/SKILL.md",
+        "---\nname: flat-one\ndescription: flat\n---\n\nbody\n",
+    );
     // inside a skill dir: support dirs are NOT scanned as skills
-    write(&root, "tools/my-tool/references/nested/SKILL.md", "---\nname: nested-skill\n---\n\nbody\n");
+    write(
+        &root,
+        "tools/my-tool/references/nested/SKILL.md",
+        "---\nname: nested-skill\n---\n\nbody\n",
+    );
     // excluded dirs are never walked
-    write(&root, "tools/node_modules/hidden/SKILL.md", "---\nname: hidden-skill\n---\n\nbody\n");
+    write(
+        &root,
+        "tools/node_modules/hidden/SKILL.md",
+        "---\nname: hidden-skill\n---\n\nbody\n",
+    );
 
     let skills = discover_skills(&root);
     let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
     assert!(names.contains(&"flat-one"));
     assert!(names.contains(&"my-tool"));
-    assert!(!names.contains(&"nested-skill"), "support dirs are not scanned as skills");
-    assert!(!names.contains(&"hidden-skill"), "excluded dirs are never walked");
+    assert!(
+        !names.contains(&"nested-skill"),
+        "support dirs are not scanned as skills"
+    );
+    assert!(
+        !names.contains(&"hidden-skill"),
+        "excluded dirs are never walked"
+    );
 
     let my_tool = skills.iter().find(|s| s.name == "my-tool").unwrap();
     assert_eq!(my_tool.category.as_deref(), Some("tools"));
@@ -94,7 +119,11 @@ fn discovery_excludes_support_and_excluded_dirs_and_falls_back() {
 #[test]
 fn lookup_works_by_frontmatter_name_and_load_returns_linked_files() {
     let root = tmp_root("lookup");
-    write(&root, "tools/my-tool/SKILL.md", "---\nname: declared-name\ndescription: d\n---\n\n# Body\n");
+    write(
+        &root,
+        "tools/my-tool/SKILL.md",
+        "---\nname: declared-name\ndescription: d\n---\n\n# Body\n",
+    );
     write(&root, "tools/my-tool/references/api.md", "api text");
     write(&root, "tools/my-tool/references/extra.txt", "wrong ext");
     write(
@@ -104,7 +133,11 @@ fn lookup_works_by_frontmatter_name_and_load_returns_linked_files() {
     );
     write(&root, "tools/my-tool/templates/sub/inner.yaml", "k: v\n");
     write(&root, "tools/my-tool/assets/logo.png", "binary-ish");
-    write(&root, "tools/my-tool/assets/notes.txt", "not in scripts globs");
+    write(
+        &root,
+        "tools/my-tool/assets/notes.txt",
+        "not in scripts globs",
+    );
     write(&root, "tools/my-tool/scripts/run.sh", "#!/bin/sh\n");
     write(&root, "tools/my-tool/scripts/run.ts", "// ts\n");
     write(&root, "tools/my-tool/other.md", "top-level stray file");
@@ -146,18 +179,17 @@ fn lookup_works_by_frontmatter_name_and_load_returns_linked_files() {
     // scripts: non-recursive *.sh/*.ts
     assert_eq!(
         files.get("scripts").map(Vec::as_slice),
-        Some(
-            &[
-                "scripts/run.sh".to_string(),
-                "scripts/run.ts".to_string(),
-            ][..]
-        )
+        Some(&["scripts/run.sh".to_string(), "scripts/run.ts".to_string(),][..])
     );
     // no other groups (references/extra.txt and other.md don't match any glob)
     assert_eq!(files.len(), 4);
 
     // empty groups are dropped: a skill with only a references/ dir
-    write(&root, "only-refs/SKILL.md", "---\nname: only-refs\n---\n\nbody\n");
+    write(
+        &root,
+        "only-refs/SKILL.md",
+        "---\nname: only-refs\n---\n\nbody\n",
+    );
     write(&root, "only-refs/references/r.md", "x");
     let (_, files) = load_skill(&root, "only-refs").unwrap();
     let files: BTreeMap<String, Vec<String>> = files;
@@ -190,8 +222,10 @@ fn skill_meta_is_sorted_by_category_then_name() {
         mk(Some("b"), "alpha"),
         mk(Some("a"), "x"),
     ]);
-    let order: Vec<(&Option<String>, &str)> =
-        sorted.iter().map(|s| (&s.category, s.name.as_str())).collect();
+    let order: Vec<(&Option<String>, &str)> = sorted
+        .iter()
+        .map(|s| (&s.category, s.name.as_str()))
+        .collect();
     assert_eq!(
         order,
         vec![
@@ -201,4 +235,92 @@ fn skill_meta_is_sorted_by_category_then_name() {
             (&Some("b".to_string()), "zeta"),
         ]
     );
+}
+
+// ── optional-skills catalog (the ported Python optional-skills/ content) ─────
+
+/// Every test below reads the optional-skills root; the env override and the
+/// embedded fallback must not flip underneath them, so they serialize.
+static OPTIONAL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn optional_root_resolves_to_the_embedded_catalog() {
+    let _guard = OPTIONAL_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // The embedded copy ships inside the crate.
+    let root = hermes_skills::optional_skills_root().expect("embedded optional/ catalog missing");
+    assert!(root.ends_with("optional"), "{root:?}");
+    let skills = hermes_skills::discover_skills(&root);
+    // The verbatim copy: every SKILL.md package in the Python tree is found.
+    assert_eq!(skills.len(), 152, "expected the full optional catalog");
+    assert!(skills
+        .iter()
+        .any(|s| s.name == "ascii-art" && s.category.as_deref() == Some("creative")));
+    // Top-level (category-less) packages stay category-less.
+    assert!(skills.iter().any(|s| s.name == "yuanbao" && s.category.is_none()));
+}
+
+#[test]
+fn optional_env_override_and_discovery_merge() {
+    let _guard = OPTIONAL_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let opt = tmp_root("opt-catalog");
+    // Two optional packages under a category dir.
+    write(
+        &opt,
+        "devops/pinggy-tunnel/SKILL.md",
+        "---\nname: pinggy-tunnel\ndescription: Expose local servers via pinggy tunnels.\n---\n\nBody.\n",
+    );
+    write(
+        &opt,
+        "devops/deploy-shadow/SKILL.md",
+        "---\nname: deploy-shadow\ndescription: Optional copy that an active skill shadows.\n---\n\nBody.\n",
+    );
+    let active = tmp_root("opt-active");
+    write(
+        &active,
+        "deploy-shadow/SKILL.md",
+        "---\nname: deploy-shadow\ndescription: Active copy wins over the optional one.\n---\n\nBody.\n",
+    );
+
+    std::env::set_var("HERMES_OPTIONAL_SKILLS", &opt);
+    let merged = hermes_skills::discover_skills_with_optional(&active);
+    let names: Vec<&str> = merged.iter().map(|s| s.name.as_str()).collect();
+    // Active-root skill first (category-less sorts before "devops").
+    assert_eq!(merged[0].name, "deploy-shadow");
+    assert_eq!(merged[0].path.parent().unwrap(), active.join("deploy-shadow"));
+    // Optional catalog appended behind the active root, shadowed name dropped.
+    assert!(names.contains(&"pinggy-tunnel"));
+    assert_eq!(names.iter().filter(|n| **n == "deploy-shadow").count(), 1);
+    // locate falls back to the optional root for a name the active root lacks.
+    let found = hermes_skills::locate_skill_with_optional(&active, "pinggy-tunnel").unwrap();
+    assert!(found.starts_with(&opt));
+    // …and still prefers the active copy for a shadowed name.
+    let found = hermes_skills::locate_skill_with_optional(&active, "deploy-shadow").unwrap();
+    assert!(found.starts_with(&active));
+    std::env::remove_var("HERMES_OPTIONAL_SKILLS");
+    let _ = fs::remove_dir_all(&active);
+    let _ = fs::remove_dir_all(&opt);
+}
+
+#[test]
+fn optional_catalog_content_integrity_spot_check() {
+    let _guard = OPTIONAL_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let root = hermes_skills::optional_skills_root().unwrap();
+    // Fixture: frontmatter parses, body intact, linked files listed.
+    let (content, files) =
+        hermes_skills::load_skill(&root, "antigravity-cli").expect("fixture skill must load");
+    assert!(content.starts_with("---\nname: antigravity-cli\n"));
+    assert!(content.contains("Operate the Antigravity CLI (agy)"));
+    assert!(content.contains("`references/cli-docs.md` — condensed notes"));
+    assert_eq!(
+        files.get("references").map(Vec::as_slice),
+        Some(&["references/cli-docs.md".to_string()][..])
+    );
+    // The linked file itself is present and non-empty on disk.
+    let linked = root
+        .join("autonomous-ai-agents")
+        .join("antigravity-cli")
+        .join("references")
+        .join("cli-docs.md");
+    assert!(linked.is_file());
+    assert!(fs::metadata(&linked).unwrap().len() > 0);
 }

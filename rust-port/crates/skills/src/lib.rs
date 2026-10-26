@@ -13,4 +13,7 @@ pub mod memory;
 pub mod skills;
 
 pub use memory::{MemoryError, MemoryStore, MutationOutcome, Target, ENTRY_DELIMITER};
-pub use skills::{discover_skills, linked_files, load_skill, locate_skill, sort_skills, SkillMeta};
+pub use skills::{
+    discover_skills, discover_skills_with_optional, linked_files, load_skill, locate_skill,
+    locate_skill_with_optional, optional_skills_root, sort_skills, SkillMeta,
+};

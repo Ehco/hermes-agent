@@ -97,7 +97,11 @@ impl MemoryStore {
         }
     }
 
-    pub fn with_limits(memory_dir: impl Into<PathBuf>, memory_char_limit: usize, user_char_limit: usize) -> Self {
+    pub fn with_limits(
+        memory_dir: impl Into<PathBuf>,
+        memory_char_limit: usize,
+        user_char_limit: usize,
+    ) -> Self {
         MemoryStore {
             memory_entries: Vec::new(),
             user_entries: Vec::new(),
@@ -147,7 +151,11 @@ impl MemoryStore {
     }
 
     fn usage(&self, target: Target) -> String {
-        format!("{}/{} chars", format_usize(self.char_count(target)), format_usize(self.limit(target)))
+        format!(
+            "{}/{} chars",
+            format_usize(self.char_count(target)),
+            format_usize(self.limit(target))
+        )
     }
 
     /// Load MEMORY.md / USER.md from disk (dedup, order-preserving, first
@@ -175,7 +183,10 @@ impl MemoryStore {
     pub fn add(&mut self, target: Target, content: &str) -> Result<MutationOutcome, MemoryError> {
         let content = content.trim();
         if content.is_empty() {
-            return Err(MemoryError::new("Content cannot be empty.", "missing_content"));
+            return Err(MemoryError::new(
+                "Content cannot be empty.",
+                "missing_content",
+            ));
         }
         // Lock, re-read from disk, mutate, persist (`_mutate`).
         let path = self.path_for(target);
@@ -215,10 +226,18 @@ impl MemoryStore {
     }
 
     /// Replace the WHOLE entry containing *old_text* with *new_content*.
-    pub fn replace(&mut self, target: Target, old_text: &str, new_content: &str) -> Result<MutationOutcome, MemoryError> {
+    pub fn replace(
+        &mut self,
+        target: Target,
+        old_text: &str,
+        new_content: &str,
+    ) -> Result<MutationOutcome, MemoryError> {
         let new_content = new_content.trim();
         if old_text.trim().is_empty() {
-            return Err(MemoryError::new("old_text cannot be empty.", "missing_old_text"));
+            return Err(MemoryError::new(
+                "old_text cannot be empty.",
+                "missing_old_text",
+            ));
         }
         if new_content.is_empty() {
             return Err(MemoryError::new(
@@ -232,9 +251,17 @@ impl MemoryStore {
     /// Replace ONE span *old_text* inside the matched entry with *new_text*;
     /// the rest of the entry is preserved verbatim. A span occurring more than
     /// once is rejected rather than edited everywhere.
-    pub fn patch(&mut self, target: Target, old_text: &str, new_text: &str) -> Result<MutationOutcome, MemoryError> {
+    pub fn patch(
+        &mut self,
+        target: Target,
+        old_text: &str,
+        new_text: &str,
+    ) -> Result<MutationOutcome, MemoryError> {
         if old_text.trim().is_empty() {
-            return Err(MemoryError::new("old_text cannot be empty.", "missing_old_text"));
+            return Err(MemoryError::new(
+                "old_text cannot be empty.",
+                "missing_old_text",
+            ));
         }
         if new_text.trim().is_empty() {
             return Err(MemoryError::new(
@@ -288,14 +315,26 @@ impl MemoryStore {
     }
 
     /// Remove the entry containing *old_text*.
-    pub fn remove(&mut self, target: Target, old_text: &str) -> Result<MutationOutcome, MemoryError> {
+    pub fn remove(
+        &mut self,
+        target: Target,
+        old_text: &str,
+    ) -> Result<MutationOutcome, MemoryError> {
         if old_text.trim().is_empty() {
-            return Err(MemoryError::new("old_text cannot be empty.", "missing_old_text"));
+            return Err(MemoryError::new(
+                "old_text cannot be empty.",
+                "missing_old_text",
+            ));
         }
         self.edit(target, old_text.trim(), None)
     }
 
-    fn edit(&mut self, target: Target, old_text: &str, new_content: Option<&str>) -> Result<MutationOutcome, MemoryError> {
+    fn edit(
+        &mut self,
+        target: Target,
+        old_text: &str,
+        new_content: Option<&str>,
+    ) -> Result<MutationOutcome, MemoryError> {
         let path = self.path_for(target);
         let (raw, read_ok) = read_raw_checked(&path);
         if !read_ok {
@@ -309,7 +348,11 @@ impl MemoryStore {
             return Err(err);
         }
         let entries = self.entries(target).to_vec();
-        let verb = if new_content.is_some() { "replace" } else { "remove" };
+        let verb = if new_content.is_some() {
+            "replace"
+        } else {
+            "remove"
+        };
         let idx = self.locate(&entries, old_text, verb)?;
         let previous = entries[idx].clone();
         let mut updated = entries.clone();
@@ -336,7 +379,11 @@ impl MemoryStore {
             return Err(MemoryError::new(err, "write_failed"));
         }
         self.set_entries(target, updated);
-        let verb_message = if new_content.is_some() { "Entry replaced." } else { "Entry removed." };
+        let verb_message = if new_content.is_some() {
+            "Entry replaced."
+        } else {
+            "Entry removed."
+        };
         let mut outcome = self.outcome(target, verb_message);
         if new_content.is_some() {
             outcome.replaced_entry = Some(previous);
@@ -368,7 +415,9 @@ impl MemoryStore {
     /// `.bak.<unix_ts>` snapshot when an entry exceeds the whole-file limit —
     /// free-form text appended without delimiters; flushing would discard it.
     fn detect_external_drift(&self, target: Target, raw: &str) -> Option<String> {
-        let over = parse_entries(raw).iter().any(|e| e.len() > self.limit(target));
+        let over = parse_entries(raw)
+            .iter()
+            .any(|e| e.len() > self.limit(target));
         if !over {
             return None;
         }
@@ -380,7 +429,10 @@ impl MemoryStore {
         ));
         match fs::write(&bak_path, raw) {
             Ok(_) => Some(bak_path.display().to_string()),
-            Err(_) => Some(format!("{} (BACKUP FAILED — file unchanged on disk)", bak_path.display())),
+            Err(_) => Some(format!(
+                "{} (BACKUP FAILED — file unchanged on disk)",
+                bak_path.display()
+            )),
         }
     }
 
@@ -419,7 +471,9 @@ fn patch_entry(entry: &str, old_text: &str, new_text: &str) -> (Option<String>, 
     if patched == entry {
         return (
             None,
-            Some(format!("Patch is a no-op: '{old_text}' -> '{new_text}' leaves the entry unchanged.")),
+            Some(format!(
+                "Patch is a no-op: '{old_text}' -> '{new_text}' leaves the entry unchanged."
+            )),
         );
     }
     (Some(patched), None)
@@ -445,8 +499,8 @@ fn normalize_for_match(text: &str) -> String {
         .replace("\\n", " ")
         .chars()
         .map(|c| match c {
-            '"' | '`' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' | '\u{201c}' | '\u{201d}'
-            | '\u{201e}' | '\u{201f}' => '\'',
+            '"' | '`' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' | '\u{201c}'
+            | '\u{201d}' | '\u{201e}' | '\u{201f}' => '\'',
             '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
             | '\u{2212}' => '-',
             _ => c,
@@ -517,7 +571,11 @@ fn no_match_error(entries: &[String], old_text: &str, verb: &str) -> MemoryError
             }
         }
     }
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    });
     let closest: Vec<String> = scored
         .into_iter()
         .take(3)
@@ -545,7 +603,13 @@ fn no_match_error(entries: &[String], old_text: &str, verb: &str) -> MemoryError
 
 fn word_set(text: &str) -> std::collections::HashSet<String> {
     text.chars()
-        .map(|c| if c.is_alphanumeric() { c.to_lowercase().next().unwrap_or(c) } else { ' ' })
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_lowercase().next().unwrap_or(c)
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .map(str::to_lowercase)
@@ -576,7 +640,9 @@ fn read_raw_checked(path: &Path) -> (String, bool) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), true),
         Err(_) => (String::new(), false),
         Ok(bytes) => {
-            let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).map_or(bytes.as_slice(), |b| b);
+            let bytes = bytes
+                .strip_prefix(&[0xEF, 0xBB, 0xBF])
+                .map_or(bytes.as_slice(), |b| b);
             match std::str::from_utf8(bytes) {
                 Ok(text) => (text.to_string(), true),
                 Err(_) => (String::new(), false),
@@ -609,10 +675,7 @@ fn persist(path: &Path, entries: &[String]) -> Result<(), String> {
             return Err(format!("Failed to create memory dir {parent:?}: {e}"));
         }
     }
-    let tmp = path.with_extension(format!(
-        "mem_{}.tmp",
-        std::process::id()
-    ));
+    let tmp = path.with_extension(format!("mem_{}.tmp", std::process::id()));
     let write = || -> std::io::Result<()> {
         let mut f = fs::File::create(&tmp)?;
         f.write_all(joined.as_bytes())?;
@@ -623,14 +686,20 @@ fn persist(path: &Path, entries: &[String]) -> Result<(), String> {
         Ok(()) => {
             if let Err(e) = fs::rename(&tmp, path) {
                 let _ = fs::remove_file(&tmp);
-                Err(format!("Failed to write memory file {}: {e}", path.display()))
+                Err(format!(
+                    "Failed to write memory file {}: {e}",
+                    path.display()
+                ))
             } else {
                 Ok(())
             }
         }
         Err(e) => {
             let _ = fs::remove_file(&tmp);
-            Err(format!("Failed to write memory file {}: {e}", path.display()))
+            Err(format!(
+                "Failed to write memory file {}: {e}",
+                path.display()
+            ))
         }
     }
 }
@@ -665,13 +734,13 @@ mod tests {
 
     fn tmp_store(memory_limit: usize, user_limit: usize) -> (MemoryStore, PathBuf) {
         let id = NEXT_TMP.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "hermes-skills-mem-{}-{}",
-            std::process::id(),
-            id
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("hermes-skills-mem-{}-{}", std::process::id(), id));
         let _ = fs::remove_dir_all(&dir);
-        (MemoryStore::with_limits(&dir, memory_limit, user_limit), dir)
+        (
+            MemoryStore::with_limits(&dir, memory_limit, user_limit),
+            dir,
+        )
     }
 
     #[test]
@@ -747,8 +816,12 @@ mod tests {
     #[test]
     fn no_match_error_suggests_closest_entries() {
         let (mut store, dir) = tmp_store(2200, 1375);
-        store.add(Target::Memory, "deploy steps: build, test, ship").unwrap();
-        let err = store.remove(Target::Memory, "deploy steps: build, test, send").unwrap_err();
+        store
+            .add(Target::Memory, "deploy steps: build, test, ship")
+            .unwrap();
+        let err = store
+            .remove(Target::Memory, "deploy steps: build, test, send")
+            .unwrap_err();
         assert_eq!(err.failure_class, "no_match");
         assert!(err.closest_entries.is_some());
         assert!(err.current_entries.is_some());
@@ -758,11 +831,24 @@ mod tests {
     #[test]
     fn patch_splices_only_the_span_and_preserves_the_rest() {
         let (mut store, dir) = tmp_store(2200, 1375);
-        store.add(Target::Memory, "deploys with cargo ship").unwrap();
-        let out = store.patch(Target::Memory, "cargo ship", "cargo ship --release").unwrap();
-        assert_eq!(store.memory_entries, vec!["deploys with cargo ship --release"]);
-        assert_eq!(out.patched_entry_after.as_deref(), Some("deploys with cargo ship --release"));
-        assert_eq!(out.replaced_entry.as_deref(), Some("deploys with cargo ship"));
+        store
+            .add(Target::Memory, "deploys with cargo ship")
+            .unwrap();
+        let out = store
+            .patch(Target::Memory, "cargo ship", "cargo ship --release")
+            .unwrap();
+        assert_eq!(
+            store.memory_entries,
+            vec!["deploys with cargo ship --release"]
+        );
+        assert_eq!(
+            out.patched_entry_after.as_deref(),
+            Some("deploys with cargo ship --release")
+        );
+        assert_eq!(
+            out.replaced_entry.as_deref(),
+            Some("deploys with cargo ship")
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -781,11 +867,16 @@ mod tests {
     #[test]
     fn folded_typography_matches_for_remove() {
         let (mut store, dir) = tmp_store(2200, 1375);
-        store.add(Target::Memory, "says \u{201c}hello\u{201d} \u{2014} always").unwrap();
+        store
+            .add(Target::Memory, "says \u{201c}hello\u{201d} \u{2014} always")
+            .unwrap();
         // Model re-types the same entry with straight quotes and a plain dash;
         // the folded substring match still locates (and removes) the entry.
         let out = store.remove(Target::Memory, "\"hello\" - always").unwrap();
-        assert_eq!(out.removed_entry.as_deref(), Some("says \u{201c}hello\u{201d} \u{2014} always"));
+        assert_eq!(
+            out.removed_entry.as_deref(),
+            Some("says \u{201c}hello\u{201d} \u{2014} always")
+        );
         assert!(store.memory_entries.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -794,7 +885,9 @@ mod tests {
     fn replace_overwrites_whole_entry_with_budget_check() {
         let (mut store, dir) = tmp_store(30, 1375);
         store.add(Target::Memory, "short").unwrap();
-        let err = store.replace(Target::Memory, "short", "this replacement is far too long").unwrap_err();
+        let err = store
+            .replace(Target::Memory, "short", "this replacement is far too long")
+            .unwrap_err();
         assert_eq!(err.failure_class, "over_budget");
         let out = store.replace(Target::Memory, "short", "replaced!").unwrap();
         assert_eq!(out.replaced_entry.as_deref(), Some("short"));
@@ -838,10 +931,7 @@ mod tests {
 
     #[test]
     fn parse_entries_strips_and_dedupes() {
-        assert_eq!(
-            parse_entries("\n a \n§\nb\n§\n a \n"),
-            vec!["a", "b"]
-        );
+        assert_eq!(parse_entries("\n a \n§\nb\n§\n a \n"), vec!["a", "b"]);
         assert!(parse_entries("").is_empty());
     }
 
