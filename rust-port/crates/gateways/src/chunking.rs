@@ -18,7 +18,11 @@ fn floor_char_boundary(s: &str, mut i: usize) -> usize {
 }
 
 /// Walk `text` line by line toggling on ``` lines; return the final `(in_code, lang)`.
-pub fn fence_state_after<'a>(text: &'a str, mut in_code: bool, mut lang: &'a str) -> (bool, String) {
+pub fn fence_state_after<'a>(
+    text: &'a str,
+    mut in_code: bool,
+    mut lang: &'a str,
+) -> (bool, String) {
     for line in text.split('\n') {
         let stripped = line.trim();
         if stripped.starts_with("```") {
@@ -194,7 +198,10 @@ mod tests {
 
     #[test]
     fn short_message_is_not_split() {
-        assert_eq!(truncate_message("hi there", 4096, utf16_len), vec!["hi there"]);
+        assert_eq!(
+            truncate_message("hi there", 4096, utf16_len),
+            vec!["hi there"]
+        );
     }
 
     #[test]
@@ -226,7 +233,11 @@ mod tests {
         // are the lossless check).
         let body_chars: Vec<char> = chunks
             .iter()
-            .map(|c| c.trim_end_matches(|p: char| p == '(' || p == ')' || p.is_ascii_digit() || p == '/' || p == ' '))
+            .map(|c| {
+                c.trim_end_matches(|p: char| {
+                    p == '(' || p == ')' || p.is_ascii_digit() || p == '/' || p == ' '
+                })
+            })
             .flat_map(|s| s.chars())
             .collect();
         assert_eq!(body_chars.iter().filter(|&&c| c == 'a').count(), 30);

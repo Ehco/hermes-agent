@@ -32,7 +32,9 @@ fn split_table_row(line: &str) -> Vec<String> {
 /// Monospace display width: East-Asian Wide / Full-width chars count as 2
 /// (`unicodedata.east_asian_width(c) in "WF"`).
 fn disp_width(s: &str) -> usize {
-    s.chars().map(|c| if east_asian_wide(c) { 2 } else { 1 }).sum()
+    s.chars()
+        .map(|c| if east_asian_wide(c) { 2 } else { 1 })
+        .sum()
 }
 
 /// Approximation of Unicode EastAsianWidth W/F for the common ranges.
@@ -85,7 +87,13 @@ fn align_table(rows: &[String]) -> Vec<String> {
         padded[1] = vec!["---".to_string(); n_cols]; // placeholder; regenerated below
     }
     let widths: Vec<usize> = (0..n_cols)
-        .map(|c| padded.iter().map(|r| disp_width(r.get(c).map(String::as_str).unwrap_or(""))).max().unwrap_or(0))
+        .map(|c| {
+            padded
+                .iter()
+                .map(|r| disp_width(r.get(c).map(String::as_str).unwrap_or("")))
+                .max()
+                .unwrap_or(0)
+        })
         .collect();
     let mut out = Vec::new();
     for (idx, row) in padded.iter().enumerate() {
@@ -146,7 +154,11 @@ pub fn wrap_markdown_tables(text: &str) -> String {
 /// Telegram's renderer: without a row-label column the full row is data and the
 /// heading bullet is skipped).
 fn render_table_block(table_block: &[String]) -> String {
-    let headers = if table_block.len() >= 3 { split_table_row(&table_block[0]) } else { Vec::new() };
+    let headers = if table_block.len() >= 3 {
+        split_table_row(&table_block[0])
+    } else {
+        Vec::new()
+    };
     if headers.len() < 2 {
         return table_block.join("\n");
     }
@@ -160,7 +172,12 @@ fn render_table_block(table_block: &[String]) -> String {
         let index = index + 1;
         let cells = split_table_row(row);
         let (heading, data_cells): (String, Vec<String>) = if has_row_label_col {
-            let h = if cells.first().map(String::as_str).map(str::is_empty).unwrap_or(true) {
+            let h = if cells
+                .first()
+                .map(String::as_str)
+                .map(str::is_empty)
+                .unwrap_or(true)
+            {
                 format!("Row {}", index)
             } else {
                 cells[0].clone()

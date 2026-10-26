@@ -32,14 +32,20 @@ pub struct DiscordRest<B: HttpBackend> {
 
 impl<B: HttpBackend> DiscordRest<B> {
     pub fn new(http: B, token: &str) -> Self {
-        DiscordRest { http, token: token.to_string(), base: API_BASE.to_string() }
+        DiscordRest {
+            http,
+            token: token.to_string(),
+            base: API_BASE.to_string(),
+        }
     }
 
     /// Bearer-auth JSON POST helper (the Python client sends
     /// `Authorization: Bot <token>`; reqwest's `bearer_auth` is equivalent).
     #[allow(dead_code)]
     async fn post(&self, path: &str, payload: Value) -> Result<Value> {
-        self.http.post_json(format!("{}{}", self.base, path), payload).await
+        self.http
+            .post_json(format!("{}{}", self.base, path), payload)
+            .await
     }
 
     /// `POST /channels/{id}/messages` with one already-chunked content string.
@@ -64,7 +70,10 @@ impl<B: HttpBackend> DiscordRest<B> {
             payload["message_reference"] = json!({ "message_id": msg_id });
         }
         self.http
-            .post_json(format!("{}/channels/{}/messages", self.base, channel_id), payload)
+            .post_json(
+                format!("{}/channels/{}/messages", self.base, channel_id),
+                payload,
+            )
             .await
     }
 
@@ -96,13 +105,19 @@ impl<B: HttpBackend> DiscordRest<B> {
                     .to_string(),
             );
         }
-        Ok(SendOutcome { chunks: chunks.len(), message_ids })
+        Ok(SendOutcome {
+            chunks: chunks.len(),
+            message_ids,
+        })
     }
 
     /// `POST /channels/{id}/typing` (`send_typing`).
     pub async fn send_typing(&self, channel_id: &str) -> Result<()> {
         self.http
-            .post_json(format!("{}/channels/{}/typing", self.base, channel_id), json!({}))
+            .post_json(
+                format!("{}/channels/{}/typing", self.base, channel_id),
+                json!({}),
+            )
             .await
             .map(|_| ())
     }
@@ -126,7 +141,10 @@ mod tests {
         fn new(responses: Vec<(String, Value)>) -> (Self, StubHandle) {
             let calls = Arc::new(Mutex::new(Vec::new()));
             (
-                StubApi { responses: Mutex::new(responses), calls: calls.clone() },
+                StubApi {
+                    responses: Mutex::new(responses),
+                    calls: calls.clone(),
+                },
                 StubHandle { calls },
             )
         }
@@ -231,10 +249,11 @@ mod tests {
 
     #[tokio::test]
     async fn thread_id_retargets_the_send() {
-        let (stub, handle) =
-            StubApi::new(vec![("/messages".into(), json!({ "id": "7" }))]);
+        let (stub, handle) = StubApi::new(vec![("/messages".into(), json!({ "id": "7" }))]);
         let rest = DiscordRest::new(stub, "TOKEN");
-        rest.send("555", "in a thread", None, Some("777")).await.unwrap();
+        rest.send("555", "in a thread", None, Some("777"))
+            .await
+            .unwrap();
         let calls = handle.calls();
         assert!(calls[0].0.ends_with("/channels/777/messages"));
     }

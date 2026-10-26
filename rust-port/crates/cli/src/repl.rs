@@ -383,7 +383,9 @@ impl Repl {
                 return Ok(Flow::Quit);
             }
 
-            other => self.out(&format!("command '{other}' is registered but not implemented yet")),
+            other => self.out(&format!(
+                "command '{other}' is registered but not implemented yet"
+            )),
         }
         Ok(Flow::Continue)
     }
@@ -401,8 +403,7 @@ impl Repl {
     /// Show the recent-sessions table and arm the one-shot bare-number
     /// selection (Python `_show_recent_sessions` + `_pending_resume_sessions`).
     fn show_sessions(&mut self) {
-        let entries =
-            session_switch::list_sessions(&self.sessions_dir(), Some(self.store.path()));
+        let entries = session_switch::list_sessions(&self.sessions_dir(), Some(self.store.path()));
         if entries.is_empty() {
             self.out("No previous sessions found. Sessions are saved next to the current one.");
             return;
@@ -446,10 +447,7 @@ impl Repl {
         self.store = store;
         self.history = history;
         self.pending_resume = None;
-        self.out(&format!(
-            "resumed \"{}\" ({} messages)",
-            entry.id, count
-        ));
+        self.out(&format!("resumed \"{}\" ({} messages)", entry.id, count));
         Ok(())
     }
 
@@ -545,7 +543,10 @@ impl Repl {
             }
             self.out_raw("\n");
 
-            let mut assistant = Message { role: Role::Assistant, content: Vec::new() };
+            let mut assistant = Message {
+                role: Role::Assistant,
+                content: Vec::new(),
+            };
             if !text.is_empty() {
                 assistant.content.push(Content::Text { text: text.clone() });
             }
@@ -576,7 +577,10 @@ impl Repl {
                 self.tool_progress(&name, &arguments, Some(&output));
                 let msg = Message {
                     role: Role::Tool,
-                    content: vec![Content::ToolResult { call_id: id, output }],
+                    content: vec![Content::ToolResult {
+                        call_id: id,
+                        output,
+                    }],
                 };
                 self.store.append(&msg)?;
                 self.history.push(msg);
@@ -676,9 +680,8 @@ mod tests {
     impl TestIo {
         fn shared(lines: &[&str], gate: Option<Arc<AtomicBool>>) -> (SharedIo, Output) {
             let out: Output = Arc::new(Mutex::new(String::new()));
-            let lines: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(
-                lines.iter().map(|s| s.to_string()).collect(),
-            ));
+            let lines: Arc<Mutex<VecDeque<String>>> =
+                Arc::new(Mutex::new(lines.iter().map(|s| s.to_string()).collect()));
             let io: SharedIo = Arc::new(Mutex::new(TestIo {
                 lines,
                 out: out.clone(),
@@ -734,13 +737,25 @@ mod tests {
         dir
     }
 
-    fn scripted_repl(tag: &str, lines: &[&str], turns: Vec<Vec<StreamItem>>) -> (Repl, Output, PathBuf) {
+    fn scripted_repl(
+        tag: &str,
+        lines: &[&str],
+        turns: Vec<Vec<StreamItem>>,
+    ) -> (Repl, Output, PathBuf) {
         let dir = temp_session_dir(tag);
         let store = SessionStore::open(dir.join("current.jsonl")).unwrap();
         let history = vec![Message::text(Role::System, SYSTEM_PROMPT)];
         let (io, out) = TestIo::shared(lines, None);
         let transport = Box::new(ScriptedTransport::new(turns)) as Box<dyn Transport>;
-        let repl = Repl::new(io, transport, tool_specs(), store, history, "test-model".into(), SYSTEM_PROMPT.into());
+        let repl = Repl::new(
+            io,
+            transport,
+            tool_specs(),
+            store,
+            history,
+            "test-model".into(),
+            SYSTEM_PROMPT.into(),
+        );
         (repl, out, dir)
     }
 
@@ -753,7 +768,10 @@ mod tests {
         let (mut repl, out, dir) = scripted_repl("help", &["/help", "/bogus", "/quit"], vec![]);
         run_repl(&mut repl).await;
         let out = out.lock().unwrap().clone();
-        assert!(out.contains("/resume [name] — Resume a previously-named session"), "got: {out}");
+        assert!(
+            out.contains("/resume [name] — Resume a previously-named session"),
+            "got: {out}"
+        );
         assert!(out.contains("unknown command /bogus — try /help"));
         assert!(out.contains("bye"));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -779,7 +797,10 @@ mod tests {
             scripted_repl("model", &["/model gpt-5-mini", "/model", "/quit"], vec![]);
         run_repl(&mut repl).await;
         let out = out.lock().unwrap().clone();
-        assert!(out.contains("model switched to gpt-5-mini (session-scoped"), "got: {out}");
+        assert!(
+            out.contains("model switched to gpt-5-mini (session-scoped"),
+            "got: {out}"
+        );
         assert!(out.contains("model: gpt-5-mini"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -865,7 +886,9 @@ mod tests {
         assert!(out.contains("there"), "got: {out}");
         let stored = repl.store.load().unwrap();
         assert_eq!(stored.len(), 2); // user + assistant
-        let Content::Text { text } = &stored[1].content[0] else { panic!("not text") };
+        let Content::Text { text } = &stored[1].content[0] else {
+            panic!("not text")
+        };
         assert_eq!(text, "hi there");
         assert!(matches!(stored[1].content[0], Content::Text { .. }));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -876,7 +899,10 @@ mod tests {
         let (mut repl, out, dir) = scripted_repl(
             "compress",
             &["/compress", "/quit"],
-            vec![vec![StreamItem::TextDelta("durable summary".into()), StreamItem::Done]],
+            vec![vec![
+                StreamItem::TextDelta("durable summary".into()),
+                StreamItem::Done,
+            ]],
         );
         repl.history.push(Message::text(Role::User, "turn one"));
         repl.store
@@ -887,7 +913,9 @@ mod tests {
         assert!(out.contains("context compressed"), "got: {out}");
         assert_eq!(repl.history.len(), 2); // system + compact turn
         let compact = &repl.history[1];
-        let Content::Text { text } = &compact.content[0] else { panic!("not text") };
+        let Content::Text { text } = &compact.content[0] else {
+            panic!("not text")
+        };
         assert!(text.contains("durable summary"));
         assert_eq!(repl.store.load().unwrap().len(), 2); // user turn + compact
         std::fs::remove_dir_all(&dir).unwrap();
@@ -902,7 +930,9 @@ mod tests {
         );
         run_repl(&mut repl).await;
         let stored = repl.store.load().unwrap();
-        let Content::Text { text } = &stored[0].content[0] else { panic!("not text") };
+        let Content::Text { text } = &stored[0].content[0] else {
+            panic!("not text")
+        };
         assert_eq!(text, "one \ntwo \nthree");
         assert!(out.lock().unwrap().contains("ok"));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -955,7 +985,10 @@ mod tests {
         run_repl(&mut repl).await;
 
         let out = out.lock().unwrap().clone();
-        assert!(out.contains("interrupted — partial response discarded"), "got: {out}");
+        assert!(
+            out.contains("interrupted — partial response discarded"),
+            "got: {out}"
+        );
         // The user message stays; no assistant turn was appended.
         assert_eq!(repl.history.len(), 2);
         assert!(matches!(repl.history[1].role, Role::User));
@@ -969,7 +1002,10 @@ mod tests {
     async fn busy_policies_are_reported_mid_turn() {
         // Unit-level: the dispatcher's mid-turn verdicts.
         // (Interrupt/Queue covered end-to-end above; here the reject path.)
-        assert!(matches!(slash::mid_turn_action("/model x"), MidTurn::Busy(_)));
+        assert!(matches!(
+            slash::mid_turn_action("/model x"),
+            MidTurn::Busy(_)
+        ));
         // The queued prompt runs after the turn.
         let (mut repl, out, dir) = scripted_repl(
             "queue",

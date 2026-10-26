@@ -37,7 +37,10 @@ async fn discovery_yields_namespaced_tool_specs() {
     assert_eq!(row.server, "mock");
     assert!(row.error.is_none(), "mock connects cleanly");
     let names: Vec<&str> = row.tools.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(names, vec!["mcp__mock__echo", "mcp__mock__fail", "mcp__mock__pingme"]);
+    assert_eq!(
+        names,
+        vec!["mcp__mock__echo", "mcp__mock__fail", "mcp__mock__pingme"]
+    );
     let echo = &row.tools[0];
     assert_eq!(echo.description, "Echo a message");
     assert_eq!(echo.schema["properties"]["message"]["type"], "string");

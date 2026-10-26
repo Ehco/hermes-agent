@@ -138,7 +138,8 @@ mod tests {
 
     #[test]
     fn surfaces_jsonrpc_error() {
-        let line = r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"Method not found"}}"#;
+        let line =
+            r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"Method not found"}}"#;
         let err = parse_response(line, 7).unwrap_err();
         assert!(err.to_string().contains("-32601"));
         assert!(err.to_string().contains("Method not found"));

@@ -104,19 +104,25 @@ mod tests {
 
     #[test]
     fn joins_text_blocks_with_newlines() {
-        let r = result(json!([
-            {"type": "text", "text": "line one"},
-            {"type": "text", "text": "line two"},
-        ]), false);
+        let r = result(
+            json!([
+                {"type": "text", "text": "line one"},
+                {"type": "text", "text": "line two"},
+            ]),
+            false,
+        );
         assert_eq!(render_call_result(&r, "t"), "line one\nline two");
     }
 
     #[test]
     fn non_text_blocks_become_markers() {
-        let r = result(json!([
-            {"type": "image", "data": "...", "mimeType": "image/png"},
-            {"type": "text", "text": "after"},
-        ]), false);
+        let r = result(
+            json!([
+                {"type": "image", "data": "...", "mimeType": "image/png"},
+                {"type": "text", "text": "after"},
+            ]),
+            false,
+        );
         assert_eq!(render_call_result(&r, "t"), "[image content block]\nafter");
     }
 

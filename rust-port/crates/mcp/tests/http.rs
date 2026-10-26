@@ -39,9 +39,9 @@ fn spawn_mock_http(script: Vec<Value>) -> (String, std::sync::mpsc::Receiver<Val
                         // Echo the request's id back: a real JSON-RPC server
                         // answers with the id the request carried, whatever
                         // the canned body's script author guessed.
-                        let mut body = script.next().unwrap_or(
-                            json!({"jsonrpc":"2.0","id":0,"result":{}}),
-                        );
+                        let mut body = script
+                            .next()
+                            .unwrap_or(json!({"jsonrpc":"2.0","id":0,"result":{}}));
                         if let Some(id) = msg.get("id").cloned() {
                             body["id"] = id;
                         }
@@ -117,13 +117,19 @@ async fn http_handshake_list_call_ping_round_trip() {
     let mut client = McpClient::http(&url, HashMap::new())
         .unwrap()
         .with_request_timeout(Duration::from_secs(15));
-    client.handshake().await.expect("handshake over streamable http");
+    client
+        .handshake()
+        .await
+        .expect("handshake over streamable http");
     assert_eq!(client.negotiated_version().unwrap(), "2025-03-26");
 
     let tools = client.list_tools().await.expect("tools/list over http");
     assert_eq!(tools[0].name, "greeter");
 
-    let result = client.call_tool("greeter", &json!({})).await.expect("tools/call over http");
+    let result = client
+        .call_tool("greeter", &json!({}))
+        .await
+        .expect("tools/call over http");
     assert_eq!(result.content[0].text.as_deref(), Some("hi from http"));
     client.ping().await.expect("ping over http");
 

@@ -24,6 +24,9 @@ struct Flags {
     api_key_env: Option<String>,
     api_key: Option<String>,
     session: Option<String>,
+    /// `--serve-mcp`: expose the tools registry over stdio MCP (the Rust port
+    /// of agent/transports/hermes_tools_mcp_server.py) instead of the REPL.
+    serve_mcp: bool,
 }
 
 impl Flags {
@@ -40,6 +43,7 @@ impl Flags {
                 "--api-key" => f.api_key = Some(take()?),
                 "--config" => f.config = Some(take()?),
                 "--session" => f.session = Some(take()?),
+                "--serve-mcp" => f.serve_mcp = true,
                 "--help" | "-h" => {
                     print_flags_help();
                     std::process::exit(0);
@@ -61,7 +65,8 @@ fn print_flags_help() {
          \x20 --base-url <url>     override the provider base URL\n\
          \x20 --api-key-env <var>  env var holding the API key (default OPENAI_API_KEY / ANTHROPIC_API_KEY)\n\
          \x20 --api-key <key>      inline API key (env var still wins)\n\
-         \x20 --session <path>     JSONL session file (default ~/.hermes/sessions/cli-rs.jsonl)\n\n\
+         \x20 --session <path>     JSONL session file (default ~/.hermes/sessions/cli-rs.jsonl)\n\
+         \x20 --serve-mcp          serve the tools registry over stdio MCP (other MCP clients drive these tools) instead of the REPL\n\n\
          SLASH COMMANDS:\n\
          \x20 type /help inside the REPL for the command table"
     );
@@ -76,14 +81,24 @@ fn session_path(flags: &Flags) -> PathBuf {
     let home = std::env::var("HERMES_HOME")
         .or_else(|_| std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")))
         .unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".hermes").join("sessions").join("cli-rs.jsonl")
+    PathBuf::from(home)
+        .join(".hermes")
+        .join("sessions")
+        .join("cli-rs.jsonl")
 }
 
-const SYSTEM_PROMPT: &str =
-    "You are Hermes, a helpful agent running from the Rust CLI port.";
+const SYSTEM_PROMPT: &str = "You are Hermes, a helpful agent running from the Rust CLI port.";
 
 async fn run() -> Result<()> {
     let flags = Flags::parse(std::env::args().skip(1))?;
+
+    // Serve mode: expose the tools registry over stdio MCP so other MCP
+    // clients (codex, Claude Desktop, …) can drive the Rust agent's tools.
+    // stdout is the wire — no banners here.
+    if flags.serve_mcp {
+        let registry = std::sync::Arc::new(hermes_tools::registry::ToolRegistry::new());
+        return hermes_mcp::server::serve_stdio(registry).await;
+    }
 
     let mut cfg = match &flags.config {
         Some(p) => ProviderConfig::load(std::path::Path::new(p)).unwrap_or_else(|e| {
@@ -93,7 +108,9 @@ async fn run() -> Result<()> {
         None => ProviderConfig::load_default()?,
     };
     // Flags override config.
-    if let Some(m) = &flags.model { cfg.model = m.clone(); }
+    if let Some(m) = &flags.model {
+        cfg.model = m.clone();
+    }
     if let Some(p) = &flags.provider {
         let is_anthropic = p == "anthropic" || p == "claude";
         cfg.kind = hermes_core::config::ProviderKind::from_api_mode(if is_anthropic {
@@ -105,9 +122,15 @@ async fn run() -> Result<()> {
             cfg.api_key_env = "ANTHROPIC_API_KEY".into();
         }
     }
-    if let Some(b) = &flags.base_url { cfg.base_url = b.clone(); }
-    if let Some(k) = &flags.api_key_env { cfg.api_key_env = k.clone(); }
-    if let Some(k) = &flags.api_key { cfg.api_key = Some(k.clone()); }
+    if let Some(b) = &flags.base_url {
+        cfg.base_url = b.clone();
+    }
+    if let Some(k) = &flags.api_key_env {
+        cfg.api_key_env = k.clone();
+    }
+    if let Some(k) = &flags.api_key {
+        cfg.api_key = Some(k.clone());
+    }
 
     let transport = cfg.build_transport()?;
     let tools = repl::tool_specs();

@@ -66,14 +66,21 @@ fn read_file(args: &Value) -> String {
     let Some(path) = args.get("path").and_then(Value::as_str) else {
         return tool_error("read_file: 'path' is required");
     };
-    let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
-    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(2000).min(2000) as usize;
+    let offset = args
+        .get("offset")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        .max(1) as usize;
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(2000)
+        .min(2000) as usize;
     match std::fs::read_to_string(path) {
         Ok(content) => {
             let lines: Vec<&str> = content.lines().collect();
             let total = lines.len();
-            let selected: Vec<&str> =
-                lines.iter().skip(offset - 1).take(limit).copied().collect();
+            let selected: Vec<&str> = lines.iter().skip(offset - 1).take(limit).copied().collect();
             let numbered: Vec<String> = selected
                 .iter()
                 .enumerate()
@@ -95,8 +102,16 @@ fn read_file(args: &Value) -> String {
 }
 
 fn list_dir(args: &Value) -> String {
-    let path = args.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).unwrap_or(".");
-    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(1000).clamp(1, 10_000) as usize;
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|p| !p.is_empty())
+        .unwrap_or(".");
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(1000)
+        .clamp(1, 10_000) as usize;
     match std::fs::read_dir(path) {
         Ok(entries) => {
             let mut listing: Vec<Value> = Vec::new();
@@ -131,7 +146,10 @@ mod tests {
 
     #[test]
     fn unknown_tools_error() {
-        assert_eq!(bridge("nope", &json!({})), r#"{"error":"unknown tool: nope"}"#);
+        assert_eq!(
+            bridge("nope", &json!({})),
+            r#"{"error":"unknown tool: nope"}"#
+        );
     }
 
     #[test]
@@ -147,7 +165,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("f.txt");
         std::fs::write(&p, "a\nb\nc").unwrap();
-        let out = bridge("read_file", &json!({ "path": p.to_string_lossy(), "offset": 2, "limit": 1 }));
+        let out = bridge(
+            "read_file",
+            &json!({ "path": p.to_string_lossy(), "offset": 2, "limit": 1 }),
+        );
         assert!(out.contains("\"2|b\""), "got: {out}");
         assert!(out.contains("\"total_lines\":3"));
         assert!(out.contains("\"next_offset\":3"));

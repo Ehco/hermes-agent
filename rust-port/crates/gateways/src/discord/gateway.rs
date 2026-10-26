@@ -14,16 +14,21 @@
 //! - op 7 RECONNECT / op 9 INVALID SESSION → resume (op 6) / re-identify,
 //! - close frame or stream error → returns, caller reconnects.
 //!
-//! TLS deferral: `gateway.discord.gg` is `wss://`. The workspace has no TLS
-//! websocket dependency, so [`connect`] speaks the RFC6455 handshake over a
-//! plain tokio `TcpStream`; the stream is generic, so a TLS implementation
-//! drops in without touching the protocol code (see port notes).
+//! TLS: `gateway.discord.gg` is `wss://`, served over the same RFC6455
+//! handshake through a rustls (ring crypto provider — the one the workspace's
+//! reqwest already compiles on windows-gnu) [`tokio_rustls`] layer with the
+//! `webpki-roots` trust store. [`WsStream`] erases the plaintext/TLS split so
+//! the protocol loop stays generic ([`run_with_stream`]); the connector choice
+//! lives in [`tls_connector_for`] (wss → TLS with system-independent roots,
+//! ws → plaintext), covered by loopback tests below without live network.
 
 use crate::contract::{BoxFut, InboundMessage, Platform};
 use anyhow::{anyhow, Result};
+use rustls::pki_types::ServerName;
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio_rustls::TlsConnector;
 
 /// Gateway version + JSON encoding (the URL the Python bot connects to).
 pub const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
@@ -149,7 +154,11 @@ pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> Result<Frame> {
         r.read_exact(&mut tail).await?;
         payload.extend_from_slice(&tail);
     }
-    Ok(Frame { fin: true, opcode, payload })
+    Ok(Frame {
+        fin: true,
+        opcode,
+        payload,
+    })
 }
 
 /// RFC4648 base64 (for the handshake key).
@@ -157,7 +166,11 @@ fn base64_key(bytes: &[u8; 16]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in bytes.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32);
         let chars = [
             (n >> 18) as usize & 63,
@@ -233,7 +246,10 @@ pub enum GwAction {
 /// action. Pure apart from the state update — this is the unit-testable core
 /// of the dispatch/heartbeat loop.
 pub fn handle_payload(state: &mut GatewayState, payload: &Value) -> GwAction {
-    let op = payload.get("op").and_then(Value::as_u64).unwrap_or(u64::MAX);
+    let op = payload
+        .get("op")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
     match op {
         GW_HELLO => {
             state.heartbeat_interval_ms = payload
@@ -264,7 +280,10 @@ pub fn handle_payload(state: &mut GatewayState, payload: &Value) -> GwAction {
             let d = payload.get("d").cloned().unwrap_or(Value::Null);
             match t {
                 "READY" => {
-                    state.session_id = d.get("session_id").and_then(Value::as_str).map(String::from);
+                    state.session_id = d
+                        .get("session_id")
+                        .and_then(Value::as_str)
+                        .map(String::from);
                     GwAction::None
                 }
                 "RESUMED" => GwAction::None,
@@ -330,10 +349,21 @@ pub fn normalize_message_create(d: &Value) -> Option<InboundMessage> {
     Some(InboundMessage {
         platform: Platform::Discord,
         chat_id: d.get("channel_id").and_then(Value::as_str)?.to_string(),
-        user_id: author.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
-        username: author.get("username").and_then(Value::as_str).map(String::from),
+        user_id: author
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        username: author
+            .get("username")
+            .and_then(Value::as_str)
+            .map(String::from),
         text: content.to_string(),
-        message_id: d.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
+        message_id: d
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
         thread_id: None, // thread sends target the thread id as chat_id (see rest.rs)
     })
 }
@@ -409,13 +439,16 @@ where
         match frame.opcode {
             OP_PING => {
                 // MUST answer pings with a pong (RFC6455 5.5.2).
-                io.write_all(&encode_frame(true, OP_PONG, &frame.payload)).await?;
+                io.write_all(&encode_frame(true, OP_PONG, &frame.payload))
+                    .await?;
                 io.flush().await?;
             }
             OP_PONG => {}
             OP_CLOSE => {
                 // Echo close, then return so the caller reconnects.
-                let _ = io.write_all(&encode_frame(true, OP_CLOSE, &frame.payload)).await;
+                let _ = io
+                    .write_all(&encode_frame(true, OP_CLOSE, &frame.payload))
+                    .await;
                 let _ = io.flush().await;
                 return Err(anyhow!("gateway closed"));
             }
@@ -424,9 +457,7 @@ where
                 match handle_payload(state, &payload) {
                     GwAction::None => {}
                     GwAction::Identify => send_text(&mut io, &identify_payload(state)).await?,
-                    GwAction::Heartbeat => {
-                        send_text(&mut io, &heartbeat_payload(state)).await?
-                    }
+                    GwAction::Heartbeat => send_text(&mut io, &heartbeat_payload(state)).await?,
                     GwAction::Resume => send_text(&mut io, &resume_payload(state)).await?,
                     GwAction::Reconnect => return Err(anyhow!("gateway asked to reconnect")),
                     GwAction::Inbound(msg) => on_dispatch(msg).await?,
@@ -443,6 +474,8 @@ pub struct GatewayAddr {
     pub port: u16,
     pub host_header: String,
     pub path: String,
+    /// `wss://` (TLS) vs `ws://` (plaintext) — drives [`tls_connector_for`].
+    pub is_tls: bool,
 }
 
 pub fn parse_gateway_url(raw: &str) -> Result<GatewayAddr> {
@@ -464,17 +497,171 @@ pub fn parse_gateway_url(raw: &str) -> Result<GatewayAddr> {
         port,
         host_header: authority.to_string(),
         path: path.to_string(),
+        is_tls,
     })
 }
 
-/// Production connector: resolve the gateway URL, open the RFC6455 handshake on
-/// a plain tokio `TcpStream` (wss/TLS deferred — module docs), run the loop.
+// ---------------------------------------------------------------------------
+// TLS layer (rustls + webpki-roots — pure Rust, no system deps on windows-gnu)
+// ---------------------------------------------------------------------------
+
+/// The client side of one established gateway connection: plaintext TCP or
+/// rustls-wrapped TCP. Both variants are `Unpin`, so this erases the TLS split
+/// for the generic [`run_with_stream`] loop without touching protocol code.
+#[derive(Debug)]
+pub enum WsStream {
+    Plain(tokio::net::TcpStream),
+    Tls(tokio_rustls::client::TlsStream<tokio::net::TcpStream>),
+}
+
+impl AsyncRead for WsStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match &mut *self {
+            WsStream::Plain(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            WsStream::Tls(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for WsStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        match &mut *self {
+            WsStream::Plain(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            WsStream::Tls(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+        }
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match &mut *self {
+            WsStream::Plain(s) => std::pin::Pin::new(s).poll_flush(cx),
+            WsStream::Tls(s) => std::pin::Pin::new(s).poll_flush(cx),
+        }
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match &mut *self {
+            WsStream::Plain(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            WsStream::Tls(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+/// The rustls trust roots for real gateway connects: Mozilla-rooted
+/// `webpki-roots` (static, no OS certificate store — the windows-gnu build
+/// must not depend on the Windows crypto APIs).
+pub fn default_gateway_roots() -> Result<rustls::RootCertStore> {
+    let roots = rustls::RootCertStore::from_iter(
+        webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
+    );
+    anyhow::ensure!(!roots.is_empty(), "webpki-roots trust store is empty");
+    Ok(roots)
+}
+
+/// A TLS connector over `roots` (ring crypto provider — installed once per
+/// process, rustls' requirement). The provider is the same `ring` build the
+/// workspace's reqwest `rustls-tls` already compiles on windows-gnu.
+pub fn connector_from_roots(roots: &rustls::RootCertStore) -> Result<TlsConnector> {
+    static PROVIDER: std::sync::OnceLock<rustls::crypto::CryptoProvider> = std::sync::OnceLock::new();
+    let provider = PROVIDER.get_or_init(rustls::crypto::ring::default_provider);
+    let config = rustls::ClientConfig::builder_with_provider(provider.clone().into())
+        .with_safe_default_protocol_versions()?
+        .with_root_certificates(roots.clone())
+        .with_no_client_auth();
+    Ok(TlsConnector::from(std::sync::Arc::new(config)))
+}
+
+/// Connector selection for a parsed gateway URL: `wss` → rustls connector with
+/// the webpki-roots store, `ws` → plaintext (no TLS layer at all).
+pub fn tls_connector_for(addr: &GatewayAddr) -> Result<Option<TlsConnector>> {
+    tls_connector_for_with(addr, None)
+}
+
+/// [`tls_connector_for`] with an optional root-store override (tests pin a
+/// loopback root; production passes `None` for the static webpki-roots store).
+pub fn tls_connector_for_with(
+    addr: &GatewayAddr,
+    roots: Option<rustls::RootCertStore>,
+) -> Result<Option<TlsConnector>> {
+    if !addr.is_tls {
+        return Ok(None);
+    }
+    let store = match roots {
+        Some(r) => r,
+        None => default_gateway_roots()?,
+    };
+    Ok(Some(connector_from_roots(&store)?))
+}
+
+/// Establish the transport for one gateway URL: TCP connect, then (for `wss`)
+/// the rustls handshake pinned to the host's certificate name. The websocket
+/// upgrade itself happens later on the returned stream.
+pub async fn open_stream(addr: &GatewayAddr) -> Result<WsStream> {
+    open_stream_with(addr, None).await
+}
+
+/// [`open_stream`] with an optional root-store override (see
+/// [`tls_connector_for_with`]).
+pub async fn open_stream_with(
+    addr: &GatewayAddr,
+    roots: Option<rustls::RootCertStore>,
+) -> Result<WsStream> {
+    let tcp =
+        tokio::net::TcpStream::connect((addr.host.as_str(), addr.port)).await?;
+    match tls_connector_for_with(addr, roots)? {
+        None => Ok(WsStream::Plain(tcp)),
+        Some(connector) => {
+            let name = ServerName::try_from(addr.host.clone())
+                .map_err(|e| anyhow!("bad gateway host {}: {e}", addr.host))?;
+            let tls = connector.connect(name, tcp).await?;
+            Ok(WsStream::Tls(tls))
+        }
+    }
+}
+
+/// Production connector: resolve the gateway URL, establish the (TLS) stream,
+/// run the RFC6455 handshake + protocol loop.
 pub async fn connect<F>(token: &str, intents: u64, on_dispatch: F) -> Result<()>
 where
     F: FnMut(InboundMessage) -> BoxFut<'static, Result<()>>,
 {
-    let addr = parse_gateway_url(GATEWAY_URL)?;
-    let mut stream = tokio::net::TcpStream::connect((addr.host.as_str(), addr.port)).await?;
+    connect_to(GATEWAY_URL, token, intents, on_dispatch).await
+}
+
+/// [`connect`] against an explicit gateway URL (tests point it at a loopback
+/// TLS listener; production at [`GATEWAY_URL`]).
+pub async fn connect_to<F>(url: &str, token: &str, intents: u64, on_dispatch: F) -> Result<()>
+where
+    F: FnMut(InboundMessage) -> BoxFut<'static, Result<()>>,
+{
+    connect_to_with(url, None, token, intents, on_dispatch).await
+}
+
+/// [`connect_to`] with an optional root-store override (loopback tests pin a
+/// self-signed test root; production passes `None` for webpki-roots).
+pub async fn connect_to_with<F>(
+    url: &str,
+    roots: Option<rustls::RootCertStore>,
+    token: &str,
+    intents: u64,
+    on_dispatch: F,
+) -> Result<()>
+where
+    F: FnMut(InboundMessage) -> BoxFut<'static, Result<()>>,
+{
+    let addr = parse_gateway_url(url)?;
+    let mut stream = open_stream_with(&addr, roots).await?;
     handshake_on_stream(&mut stream, &addr.host_header, &addr.path).await?;
     let mut state = GatewayState::new(token, intents);
     run_with_stream(stream, &mut state, on_dispatch).await
@@ -526,7 +713,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
     use serde_json::json;
+    use tokio_rustls::TlsAcceptor;
 
     // ---- RFC6455 framing ----
 
@@ -670,24 +859,36 @@ mod tests {
         assert!(st.session_id.is_none());
         // Invalid session (true) → resume.
         st.session_id = Some("s".into());
-        assert_eq!(handle_payload(&mut st, &json!({ "op": 9, "d": true })), GwAction::Resume);
+        assert_eq!(
+            handle_payload(&mut st, &json!({ "op": 9, "d": true })),
+            GwAction::Resume
+        );
     }
 
     #[test]
     fn empty_content_and_unknown_dispatches_are_ignored() {
         let mut st = GatewayState::new("TOK", 0);
         assert_eq!(
-            handle_payload(&mut st, &json!({
-                "op": 0, "t": "MESSAGE_CREATE", "s": 1,
-                "d": { "id": "1", "content": "", "author": { "id": "2" }, "channel_id": "3" },
-            })),
+            handle_payload(
+                &mut st,
+                &json!({
+                    "op": 0, "t": "MESSAGE_CREATE", "s": 1,
+                    "d": { "id": "1", "content": "", "author": { "id": "2" }, "channel_id": "3" },
+                })
+            ),
             GwAction::None
         );
         assert_eq!(
-            handle_payload(&mut st, &json!({ "op": 0, "t": "TYPING_START", "s": 2, "d": {} })),
+            handle_payload(
+                &mut st,
+                &json!({ "op": 0, "t": "TYPING_START", "s": 2, "d": {} })
+            ),
             GwAction::None
         );
-        assert_eq!(handle_payload(&mut st, &json!({ "op": 99 })), GwAction::None);
+        assert_eq!(
+            handle_payload(&mut st, &json!({ "op": 99 })),
+            GwAction::None
+        );
     }
 
     #[test]
@@ -697,6 +898,171 @@ mod tests {
         assert_eq!(a.port, 443);
         assert_eq!(a.path, "/?v=10&encoding=json");
         assert_eq!(a.host_header, "gateway.discord.gg");
+        assert!(a.is_tls);
+    }
+
+    // ---- TLS connector selection (no network) ----
+
+    #[test]
+    fn connector_selection_tls_vs_plain() {
+        // wss → a rustls connector over the webpki-roots store.
+        let wss = parse_gateway_url("wss://gateway.discord.gg/?v=10&encoding=json").unwrap();
+        assert!(tls_connector_for(&wss).unwrap().is_some());
+        // ws → plaintext: no TLS layer at all.
+        let ws = parse_gateway_url("ws://127.0.0.1:9999/x").unwrap();
+        assert!(tls_connector_for(&ws).unwrap().is_none());
+        // The real production roots are static (webpki-roots), never empty.
+        assert!(default_gateway_roots().unwrap().len() > 100);
+    }
+
+    #[tokio::test]
+    async fn wss_to_a_plain_listener_fails_the_tls_handshake() {
+        // A plain TCP server speaks no TLS, so the wss connector must fail the
+        // handshake — proving wss:// really selects the TLS layer.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (_tcp, _) = listener.accept().await.unwrap();
+            // Never respond — the client's TLS ClientHello gets nothing back.
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        let addr = parse_gateway_url(&format!("wss://127.0.0.1:{port}/x")).unwrap();
+        let err = open_stream(&addr).await.unwrap_err();
+        assert!(
+            !err.to_string().is_empty(),
+            "wss handshake against a plaintext server must fail"
+        );
+    }
+
+    /// Fixed self-signed test root (CN=127.0.0.1, SAN IP:127.0.0.1/DNS:localhost,
+    /// generated once with openssl; the DER files live next to this module).
+    const TEST_CERT_DER: &[u8] = include_bytes!("test_gateway_root.der");
+    const TEST_KEY_PKCS8_DER: &[u8] = include_bytes!("test_gateway_key.pkcs8.der");
+
+    /// A rustls TLS server (test root) serving a scripted Discord gateway over
+    /// wss: answers the RFC6455 upgrade, plays HELLO → IDENTIFY →
+    /// MESSAGE_CREATE → close, and returns the client payloads it observed.
+    async fn serve_tls_gateway(listener: tokio::net::TcpListener) -> Vec<Value> {
+        let cert = CertificateDer::from_slice(TEST_CERT_DER).to_owned();
+        let key = PrivateKeyDer::Pkcs8(TEST_KEY_PKCS8_DER.to_vec().into());
+        static PROVIDER: std::sync::OnceLock<rustls::crypto::CryptoProvider> =
+            std::sync::OnceLock::new();
+        let provider = PROVIDER.get_or_init(rustls::crypto::ring::default_provider);
+        let config = rustls::ServerConfig::builder_with_provider(provider.clone().into())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key)
+            .unwrap();
+        let acceptor = TlsAcceptor::from(std::sync::Arc::new(config));
+
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut io = acceptor.accept(tcp).await.unwrap();
+        // RFC6455 upgrade: read the GET (discard), answer 101.
+        let mut req = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            io.read_exact(&mut byte).await.unwrap();
+            req.push(byte[0]);
+            if req.ends_with(b"\r\n\r\n") {
+                break;
+            }
+            assert!(req.len() < 16 * 1024);
+        }
+        assert!(String::from_utf8_lossy(&req).starts_with("GET "));
+        io.write_all(
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\
+              Connection: Upgrade\r\nSec-WebSocket-Accept: test\r\n\r\n",
+        )
+        .await
+        .unwrap();
+        io.flush().await.unwrap();
+        // HELLO, then expect IDENTIFY.
+        io.write_all(&encode_frame(
+            false,
+            OP_TEXT,
+            json!({ "op": 10, "d": { "heartbeat_interval": 100_000 } }).to_string().as_bytes(),
+        ))
+        .await
+        .unwrap();
+        io.flush().await.unwrap();
+        let mut seen = Vec::new();
+        let identify = read_frame(&mut io).await.unwrap();
+        assert_eq!(identify.opcode, OP_TEXT);
+        seen.push(serde_json::from_slice::<Value>(&identify.payload).unwrap());
+        // MESSAGE_CREATE dispatch, then close — the client must surface the
+        // message and echo the close.
+        io.write_all(&encode_frame(
+            false,
+            OP_TEXT,
+            json!({
+                "op": 0, "t": "MESSAGE_CREATE", "s": 1,
+                "d": { "id": "1", "content": "over-tls", "author": { "id": "2" }, "channel_id": "3" },
+            })
+            .to_string()
+            .as_bytes(),
+        ))
+        .await
+        .unwrap();
+        io.write_all(&encode_frame(false, OP_CLOSE, &[0, 100]))
+            .await
+            .unwrap();
+        io.flush().await.unwrap();
+        // Drain what the client answers (the close echo may race with our
+        // writes — bounded, best effort).
+        for _ in 0..4 {
+            match tokio::time::timeout(Duration::from_secs(2), read_frame(&mut io)).await {
+                Ok(Ok(f)) => {
+                    if f.opcode == OP_TEXT {
+                        seen.push(serde_json::from_slice::<Value>(&f.payload).unwrap());
+                    }
+                    if f.opcode == OP_CLOSE {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        let _ = io.shutdown().await;
+        seen
+    }
+
+    #[tokio::test]
+    async fn gateway_loop_runs_end_to_end_over_real_tls() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let dispatched = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let d2 = dispatched.clone();
+        let run = tokio::spawn({
+            let url = format!("wss://127.0.0.1:{port}/?v=10&encoding=json");
+            // Pin the self-signed test root (the production webpki-roots store
+            // obviously doesn't know this loopback cert).
+            let mut roots = rustls::RootCertStore::empty();
+            roots
+                .add(CertificateDer::from_slice(TEST_CERT_DER).to_owned())
+                .unwrap();
+            async move {
+                let r = connect_to_with(&url, Some(roots), "TOK", DEFAULT_INTENTS, move |msg| {
+                    let log = d2.clone();
+                    Box::pin(async move {
+                        log.lock().unwrap().push(msg.text);
+                        Ok(())
+                    })
+                })
+                .await;
+                assert!(r.is_err(), "close frame ends the loop with an error");
+            }
+        });
+        let seen = tokio::time::timeout(Duration::from_secs(10), serve_tls_gateway(listener))
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(5), run).await;
+
+        // The client identified over TLS… and surfaced the dispatched message.
+        assert_eq!(seen[0]["op"], 2);
+        assert_eq!(seen[0]["d"]["token"], "TOK");
+        assert_eq!(*dispatched.lock().unwrap(), vec!["over-tls".to_string()]);
     }
 
     // ---- full loop over a stubbed transport ----
@@ -714,7 +1080,11 @@ mod tests {
         fn new(buffer: usize) -> (Self, tokio::io::DuplexStream) {
             let (client, server) = tokio::io::duplex(buffer);
             (
-                ScriptedPeer { io: server, pending: Vec::new(), sent: Vec::new() },
+                ScriptedPeer {
+                    io: server,
+                    pending: Vec::new(),
+                    sent: Vec::new(),
+                },
                 client,
             )
         }
@@ -839,7 +1209,9 @@ mod tests {
         drop(run);
         peer.flush_and_read().await.unwrap();
         assert!(
-            peer.sent.iter().any(|f| f.opcode == OP_PONG && f.payload == b"probe"),
+            peer.sent
+                .iter()
+                .any(|f| f.opcode == OP_PONG && f.payload == b"probe"),
             "no pong with the ping payload"
         );
     }

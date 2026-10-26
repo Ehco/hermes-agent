@@ -63,7 +63,9 @@ impl StdioTransport {
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
-        let mut child = cmd.spawn().with_context(|| format!("spawning MCP server {command:?}"))?;
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("spawning MCP server {command:?}"))?;
         let stdin = child
             .stdin
             .take()
@@ -194,11 +196,17 @@ impl HttpTransport {
         for (k, v) in &self.headers {
             req = req.header(k, v);
         }
-        let resp = req.body(body.to_string()).send().await.with_context(|| {
-            format!("POSTing to MCP endpoint {}", self.url)
-        })?;
+        let resp = req
+            .body(body.to_string())
+            .send()
+            .await
+            .with_context(|| format!("POSTing to MCP endpoint {}", self.url))?;
         // Capture session id + negotiated protocol version for later requests.
-        if let Some(sid) = resp.headers().get("Mcp-Session-Id").or_else(|| resp.headers().get("mcp-session-id")) {
+        if let Some(sid) = resp
+            .headers()
+            .get("Mcp-Session-Id")
+            .or_else(|| resp.headers().get("mcp-session-id"))
+        {
             self.session_id = Some(sid.to_str().unwrap_or_default().to_string());
         }
         let status = resp.status();
@@ -206,7 +214,11 @@ impl HttpTransport {
             // 202-style empty acks for notifications are success at the HTTP layer;
             // anything else non-2xx is a connect/request failure.
             if expect_reply {
-                return Err(anyhow!("MCP endpoint {} returned HTTP {}", self.url, status));
+                return Err(anyhow!(
+                    "MCP endpoint {} returned HTTP {}",
+                    self.url,
+                    status
+                ));
             }
             return Err(anyhow!(
                 "MCP endpoint {} rejected a notification with HTTP {}",

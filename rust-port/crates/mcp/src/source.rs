@@ -118,7 +118,8 @@ fn glob_match(pattern: &str, name: &str) -> bool {
 fn glob_match_inner(pat: &[char], name: &[char]) -> bool {
     match (pat.first(), name.first()) {
         (Some('*'), _) => {
-            glob_match_inner(&pat[1..], name) || (!name.is_empty() && glob_match_inner(pat, &name[1..]))
+            glob_match_inner(&pat[1..], name)
+                || (!name.is_empty() && glob_match_inner(pat, &name[1..]))
         }
         (Some('?'), Some(_)) => glob_match_inner(&pat[1..], &name[1..]),
         (Some(p), Some(n)) if p == n => glob_match_inner(&pat[1..], &name[1..]),
@@ -157,7 +158,8 @@ pub trait ToolSource: Send + Sync {
     async fn discover(&self) -> Vec<ServerTools>;
     /// Dispatch a call to the server owning `registry_name`, normalizing the
     /// result into the agent-loop tool-result string.
-    async fn call_by_registry_name(&self, registry_name: &str, arguments: &Value) -> Result<String>;
+    async fn call_by_registry_name(&self, registry_name: &str, arguments: &Value)
+        -> Result<String>;
 }
 
 /// A directory of configured MCP servers (stdio + Streamable HTTP).
@@ -216,8 +218,8 @@ impl McpServerSource {
                 .ok_or_else(|| anyhow!("MCP server '{name}' has no 'command' in config"))?;
             McpClient::stdio(command, &cfg.args, &cfg.env, cfg.cwd.as_deref())?
         };
-        client = client
-            .with_request_timeout(Duration::from_secs(cfg.timeout.unwrap_or(300).min(3600)));
+        client =
+            client.with_request_timeout(Duration::from_secs(cfg.timeout.unwrap_or(300).min(3600)));
         client.handshake().await?;
         Ok(client)
     }
@@ -246,14 +248,16 @@ impl McpServerSource {
                         if cfg.tools.as_ref().map_or(true, |f| f.accepts(&tool.name)) {
                             let registry = prefixed_tool_name(&name, &tool.name);
                             specs.push(tool_spec(&name, tool));
-                            let mut owners = self
-                                .tool_owners
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner());
+                            let mut owners =
+                                self.tool_owners.lock().unwrap_or_else(|e| e.into_inner());
                             owners.insert(registry, (name.clone(), tool.name.clone()));
                         }
                     }
-                    ServerTools { server: name.clone(), tools: specs, error: None }
+                    ServerTools {
+                        server: name.clone(),
+                        tools: specs,
+                        error: None,
+                    }
                 }
                 Err(e) => ServerTools {
                     server: name.clone(),
@@ -278,7 +282,11 @@ impl McpServerSource {
     /// remainder after `mcp__<server>__` (exact when the raw tool name had
     /// no characters that sanitization folded).
     fn fallback_raw_name(&self, registry_name: &str, server: &str) -> String {
-        let prefix = format!("{}{}__", MCP_TOOL_NAME_PREFIX, sanitize_name_component(server));
+        let prefix = format!(
+            "{}{}__",
+            MCP_TOOL_NAME_PREFIX,
+            sanitize_name_component(server)
+        );
         registry_name
             .strip_prefix(&prefix)
             .unwrap_or(registry_name)
@@ -287,7 +295,11 @@ impl McpServerSource {
 
     fn owning_server(&self, registry_name: &str) -> Option<String> {
         self.server_names().into_iter().find(|s| {
-            registry_name.starts_with(&format!("{}{}__", MCP_TOOL_NAME_PREFIX, sanitize_name_component(s)))
+            registry_name.starts_with(&format!(
+                "{}{}__",
+                MCP_TOOL_NAME_PREFIX,
+                sanitize_name_component(s)
+            ))
         })
     }
 }
@@ -298,14 +310,21 @@ impl ToolSource for McpServerSource {
         self.discover_tool_specs().await
     }
 
-    async fn call_by_registry_name(&self, registry_name: &str, arguments: &Value) -> Result<String> {
+    async fn call_by_registry_name(
+        &self,
+        registry_name: &str,
+        arguments: &Value,
+    ) -> Result<String> {
         let (server, raw) = match self.owner_of(registry_name) {
             Some(found) => found,
             None => {
-                let server = self
-                    .owning_server(registry_name)
-                    .ok_or_else(|| anyhow!("no configured MCP server owns tool {registry_name:?}"))?;
-                (server.clone(), self.fallback_raw_name(registry_name, &server))
+                let server = self.owning_server(registry_name).ok_or_else(|| {
+                    anyhow!("no configured MCP server owns tool {registry_name:?}")
+                })?;
+                (
+                    server.clone(),
+                    self.fallback_raw_name(registry_name, &server),
+                )
             }
         };
         let mut client = self.connect(&server).await?;
@@ -339,7 +358,10 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(src.server_names(), vec!["github".to_string(), "remote".to_string()]);
+        assert_eq!(
+            src.server_names(),
+            vec!["github".to_string(), "remote".to_string()]
+        );
         let gh = src.config("github").unwrap();
         assert_eq!(gh.args, vec!["-y".to_string(), "gh".to_string()]);
         assert_eq!(gh.timeout, Some(42));

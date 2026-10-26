@@ -32,7 +32,9 @@ pub struct SessionEntry {
 /// current session file, capped at `RESUME_LIST_LIMIT`.
 pub fn list_sessions(dir: &Path, current: Option<&Path>) -> Vec<SessionEntry> {
     let mut out: Vec<SessionEntry> = Vec::new();
-    let Ok(read_dir) = std::fs::read_dir(dir) else { return out };
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return out;
+    };
     for entry in read_dir.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
@@ -52,7 +54,12 @@ pub fn list_sessions(dir: &Path, current: Option<&Path>) -> Vec<SessionEntry> {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        out.push(SessionEntry { id, path, modified, messages });
+        out.push(SessionEntry {
+            id,
+            path,
+            modified,
+            messages,
+        });
     }
     out.sort_by(|a, b| b.modified.cmp(&a.modified).then(a.id.cmp(&b.id)));
     out.truncate(RESUME_LIST_LIMIT);
@@ -72,7 +79,10 @@ pub fn strip_placeholder(target: &str) -> &str {
     if t.len() >= 2 {
         let bytes = t.as_bytes();
         let (first, last) = (bytes[0], bytes[t.len() - 1]);
-        if matches!((first, last), (b'<', b'>') | (b'[', b']') | (b'"', b'"') | (b'\'', b'\'')) {
+        if matches!(
+            (first, last),
+            (b'<', b'>') | (b'[', b']') | (b'"', b'"') | (b'\'', b'\'')
+        ) {
             return t[1..t.len() - 1].trim();
         }
     }
@@ -154,7 +164,11 @@ mod tests {
         let older = dir.join("older.jsonl");
         let newer = dir.join("newer.jsonl");
         let current = dir.join("current.jsonl");
-        std::fs::write(&older, "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]}\n").unwrap();
+        std::fs::write(
+            &older,
+            "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]}\n",
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(120));
         std::fs::write(&newer, "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"b\"}]}\n{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"c\"}]}\n").unwrap();
         std::fs::write(&current, "").unwrap();
@@ -162,7 +176,11 @@ mod tests {
         std::fs::write(&stray, "not a session").unwrap();
 
         let sessions = list_sessions(&dir, Some(&current));
-        assert_eq!(sessions.len(), 2, "current + non-jsonl excluded: {sessions:?}");
+        assert_eq!(
+            sessions.len(),
+            2,
+            "current + non-jsonl excluded: {sessions:?}"
+        );
         assert_eq!(sessions[0].id, "newer");
         assert_eq!(sessions[1].id, "older");
         assert_eq!(sessions[0].messages, 2);
@@ -178,8 +196,18 @@ mod tests {
     #[test]
     fn resolves_numbers_placeholders_and_stems() {
         let entries: Vec<SessionEntry> = vec![
-            SessionEntry { id: "alpha".into(), path: PathBuf::from("alpha.jsonl"), modified: SystemTime::now(), messages: 3 },
-            SessionEntry { id: "beta".into(), path: PathBuf::from("beta.jsonl"), modified: SystemTime::now(), messages: 1 },
+            SessionEntry {
+                id: "alpha".into(),
+                path: PathBuf::from("alpha.jsonl"),
+                modified: SystemTime::now(),
+                messages: 3,
+            },
+            SessionEntry {
+                id: "beta".into(),
+                path: PathBuf::from("beta.jsonl"),
+                modified: SystemTime::now(),
+                messages: 1,
+            },
         ];
         assert_eq!(resolve_target(&entries, "1").unwrap().id, "alpha");
         assert_eq!(resolve_target(&entries, "2").unwrap().id, "beta");
@@ -188,8 +216,17 @@ mod tests {
         assert_eq!(resolve_target(&entries, "<beta>").unwrap().id, "beta");
         assert_eq!(resolve_target(&entries, "[alpha]").unwrap().id, "alpha");
         assert_eq!(resolve_target(&entries, "\"alpha\"").unwrap().id, "alpha");
-        assert_eq!(resolve_target(&entries, "0"), Err(ResolveError::OutOfRange(0)));
-        assert_eq!(resolve_target(&entries, "9"), Err(ResolveError::OutOfRange(9)));
-        assert_eq!(resolve_target(&entries, "gamma"), Err(ResolveError::NotFound("gamma".into())));
+        assert_eq!(
+            resolve_target(&entries, "0"),
+            Err(ResolveError::OutOfRange(0))
+        );
+        assert_eq!(
+            resolve_target(&entries, "9"),
+            Err(ResolveError::OutOfRange(9))
+        );
+        assert_eq!(
+            resolve_target(&entries, "gamma"),
+            Err(ResolveError::NotFound("gamma".into()))
+        );
     }
 }

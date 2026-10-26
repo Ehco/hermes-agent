@@ -4,7 +4,7 @@
 //! spawn/dial, `initialize` handshake, `notifications/initialized`,
 //! capability-gated `tools/list` (cursor-paginated), `tools/call`, `ping`.
 
-use crate::jsonrpc::{self, notification, request, PROTOCOL_VERSION, CLIENT_NAME, CLIENT_VERSION};
+use crate::jsonrpc::{self, notification, request, CLIENT_NAME, CLIENT_VERSION, PROTOCOL_VERSION};
 use crate::protocol::{
     CallToolParams, CallToolResult, InitializeParams, InitializeResult, ListToolsResult, Tool,
 };
@@ -113,7 +113,10 @@ impl McpClient {
     }
 
     /// One `tools/list` page (cursor pagination per the MCP spec).
-    pub async fn list_tools_page(&mut self, cursor: Option<&str>) -> Result<(Vec<Tool>, Option<String>)> {
+    pub async fn list_tools_page(
+        &mut self,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<Tool>, Option<String>)> {
         let raw = self
             .rpc("tools/list", json!({"cursor": cursor.unwrap_or("")}))
             .await?;
@@ -123,7 +126,7 @@ impl McpClient {
     }
 
     /// The full tool list, following `nextCursor` until exhaustion
-        /// (Python `_paginate_full_list`).
+    /// (Python `_paginate_full_list`).
     pub async fn list_tools(&mut self) -> Result<Vec<Tool>> {
         let mut all = Vec::new();
         let mut cursor: Option<String> = None;
@@ -141,7 +144,14 @@ impl McpClient {
     /// to turn it into the agent-loop tool-result string.
     pub async fn call_tool(&mut self, name: &str, arguments: &Value) -> Result<CallToolResult> {
         let raw = self
-            .rpc("tools/call", CallToolParams { name: name.into(), arguments: arguments.clone() }.to_json())
+            .rpc(
+                "tools/call",
+                CallToolParams {
+                    name: name.into(),
+                    arguments: arguments.clone(),
+                }
+                .to_json(),
+            )
             .await?;
         let result: CallToolResult =
             serde_json::from_value(raw).context("malformed tools/call result")?;

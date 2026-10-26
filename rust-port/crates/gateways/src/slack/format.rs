@@ -54,7 +54,11 @@ pub fn format_message(content: &str) -> String {
     if content.is_empty() {
         return content.to_string();
     }
-    let mut ph = Placeholders { map: HashMap::new(), order: Vec::new(), counter: 0 };
+    let mut ph = Placeholders {
+        map: HashMap::new(),
+        order: Vec::new(),
+        counter: 0,
+    };
 
     // Tables → fenced + aligned (mrkdwn shows pipe tables literally).
     let content = wrap_markdown_tables(content);
@@ -129,7 +133,10 @@ pub fn format_message(content: &str) -> String {
     ] {
         text = text.replace(ent, ch);
     }
-    let text = text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let text = text
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
 
     // Headers: `# Title` → `*Title*`; a trailing `###` closer is stripped and
     // inner `**` flattened.
@@ -145,7 +152,9 @@ pub fn format_message(content: &str) -> String {
     // Emphasis, outermost first.
     let bold_italic_re = Regex::new(r"\*\*\*(.+?)\*\*\*").unwrap();
     let text = bold_italic_re
-        .replace_all(&text, |c: &regex::Captures| ph.add(format!("*_{}_*", &c[1])))
+        .replace_all(&text, |c: &regex::Captures| {
+            ph.add(format!("*_{}_*", &c[1]))
+        })
         .to_string();
 
     let bold_re = Regex::new(r"\*\*(.+?)\*\*").unwrap();
@@ -261,10 +270,19 @@ mod tests {
 
     #[test]
     fn links_to_slack_autolink() {
-        assert_eq!(format_message("[docs](https://e.com/x)"), "<https://e.com/x|docs>");
-        assert_eq!(format_message("[label](<https://e.com/y>)"), "<https://e.com/y|label>");
+        assert_eq!(
+            format_message("[docs](https://e.com/x)"),
+            "<https://e.com/x|docs>"
+        );
+        assert_eq!(
+            format_message("[label](<https://e.com/y>)"),
+            "<https://e.com/y|label>"
+        );
         // !-prefixed (image) links pass through.
-        assert_eq!(format_message("![alt](https://e.com/i.png)"), "![alt](https://e.com/i.png)");
+        assert_eq!(
+            format_message("![alt](https://e.com/i.png)"),
+            "![alt](https://e.com/i.png)"
+        );
     }
 
     #[test]

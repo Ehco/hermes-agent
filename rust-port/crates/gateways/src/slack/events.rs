@@ -76,11 +76,18 @@ const PASSING_SUBTYPES: &[&str] = &[
 /// Parse one inbound envelope. `dedup` carries the workspace-scoped seen set
 /// across calls (the adapter's `_dedup`).
 pub fn parse_envelope(envelope: &serde_json::Value, dedup: &mut EventDedup) -> SlackEvent {
-    let env_type = envelope.get("type").and_then(serde_json::Value::as_str).unwrap_or("");
+    let env_type = envelope
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
     match env_type {
         "url_verification" => {
             return SlackEvent::Challenge(
-                envelope.get("challenge").and_then(serde_json::Value::as_str).unwrap_or("").to_string(),
+                envelope
+                    .get("challenge")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
             );
         }
         "event_callback" | "events_api" => {
@@ -90,7 +97,9 @@ pub fn parse_envelope(envelope: &serde_json::Value, dedup: &mut EventDedup) -> S
                 // Socket Mode wraps the inner event under `payload`.
                 envelope.get("payload")
             };
-            let Some(event) = event else { return SlackEvent::Unknown };
+            let Some(event) = event else {
+                return SlackEvent::Unknown;
+            };
             let team_id = envelope
                 .get("team_id")
                 .or_else(|| envelope.get("team"))
@@ -127,12 +136,18 @@ fn normalize_event(
     }
     // Dedup per workspace: ts is only unique per team; socket mode redelivers
     // after reconnects (#4777).
-    let event_ts = event.get("ts").and_then(serde_json::Value::as_str).unwrap_or("");
+    let event_ts = event
+        .get("ts")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
     if !event_ts.is_empty() && !dedup.first_time(team_id, event_ts) {
         return None;
     }
     // Housekeeping subtypes are not a person speaking (allowlist).
-    let subtype = event.get("subtype").and_then(serde_json::Value::as_str).unwrap_or("");
+    let subtype = event
+        .get("subtype")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
     if !PASSING_SUBTYPES.contains(&subtype) {
         return None;
     }
@@ -141,14 +156,24 @@ fn normalize_event(
     if event.get("bot_id").is_some() || event.get("bot_profile").is_some() {
         return None;
     }
-    let text = event.get("text").and_then(serde_json::Value::as_str).unwrap_or("");
+    let text = event
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
     if text.is_empty() {
         return None;
     }
     Some(InboundMessage {
         platform: Platform::Slack,
-        chat_id: event.get("channel").and_then(serde_json::Value::as_str)?.to_string(),
-        user_id: event.get("user").and_then(serde_json::Value::as_str).unwrap_or("").to_string(),
+        chat_id: event
+            .get("channel")
+            .and_then(serde_json::Value::as_str)?
+            .to_string(),
+        user_id: event
+            .get("user")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
         username: None, // resolved via users.info upstream; not carried in events
         text: text.to_string(),
         message_id: event_ts.to_string(),
@@ -247,7 +272,10 @@ mod tests {
             "type": "event_callback", "team_id": "T1",
             "event": { "type": "message", "channel": "C1", "user": "U1", "text": "once", "ts": "9.9" },
         });
-        assert!(matches!(parse_envelope(&env, &mut dedup), SlackEvent::Inbound(_)));
+        assert!(matches!(
+            parse_envelope(&env, &mut dedup),
+            SlackEvent::Inbound(_)
+        ));
         // Redelivery (same team + ts) → ignored.
         assert_eq!(parse_envelope(&env, &mut dedup), SlackEvent::Ignored);
         // Same ts in another workspace is a DIFFERENT event (ts only unique per team).
@@ -255,7 +283,10 @@ mod tests {
             "type": "event_callback", "team_id": "T2",
             "event": { "type": "message", "channel": "C1", "user": "U1", "text": "other team", "ts": "9.9" },
         });
-        assert!(matches!(parse_envelope(&other_team, &mut dedup), SlackEvent::Inbound(_)));
+        assert!(matches!(
+            parse_envelope(&other_team, &mut dedup),
+            SlackEvent::Inbound(_)
+        ));
     }
 
     #[test]
@@ -272,7 +303,10 @@ mod tests {
             "event": { "type": "message", "channel": "C1", "user": "U1", "text": "echo",
                        "ts": "1.2", "bot_profile": { "name": "bot" } },
         });
-        assert_eq!(parse_envelope(&bot_profile, &mut dedup), SlackEvent::Ignored);
+        assert_eq!(
+            parse_envelope(&bot_profile, &mut dedup),
+            SlackEvent::Ignored
+        );
     }
 
     #[test]

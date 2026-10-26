@@ -2,7 +2,9 @@
 //! `plugins/platforms/telegram/adapter.py` (the python-telegram-bot wiring).
 
 use crate::chunking::truncate_message;
-use crate::contract::{BoxFut, GatewayTransport, HttpBackend, InboundMessage, Platform, SendOutcome};
+use crate::contract::{
+    BoxFut, GatewayTransport, HttpBackend, InboundMessage, Platform, SendOutcome,
+};
 use crate::telegram::format;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -23,7 +25,11 @@ pub struct TelegramTransport<B: HttpBackend> {
 
 impl<B: HttpBackend> TelegramTransport<B> {
     pub fn new(http: B, token: &str) -> Self {
-        TelegramTransport { http, token: token.to_string(), offset: 0 }
+        TelegramTransport {
+            http,
+            token: token.to_string(),
+            offset: 0,
+        }
     }
 
     fn api_url(&self, method: &str) -> String {
@@ -35,7 +41,10 @@ impl<B: HttpBackend> TelegramTransport<B> {
         // Bot API envelope: {"ok": bool, "result" | "description", "error_code"}
         let ok = body.get("ok").and_then(Value::as_bool).unwrap_or(false);
         if !ok {
-            let desc = body.get("description").and_then(Value::as_str).unwrap_or("unknown error");
+            let desc = body
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
             return Err(anyhow!("{}: {}", method, desc));
         }
         Ok(body.get("result").cloned().unwrap_or(Value::Null))
@@ -186,7 +195,10 @@ impl<B: HttpBackend> GatewayTransport for TelegramTransport<B> {
                 };
                 message_ids.push(id);
             }
-            Ok(SendOutcome { message_ids, chunks: chunks.len() })
+            Ok(SendOutcome {
+                message_ids,
+                chunks: chunks.len(),
+            })
         })
     }
 }
@@ -227,8 +239,14 @@ fn normalize_update(update: &Value) -> Option<InboundMessage> {
         .and_then(|f| f.get("id").and_then(Value::as_i64))
         .map(|id| id.to_string())
         .unwrap_or_default();
-    let username = from.and_then(|f| f.get("username")).and_then(Value::as_str).map(String::from);
-    let message_id = msg.get("message_id").and_then(Value::as_i64).map(|id| id.to_string());
+    let username = from
+        .and_then(|f| f.get("username"))
+        .and_then(Value::as_str)
+        .map(String::from);
+    let message_id = msg
+        .get("message_id")
+        .and_then(Value::as_i64)
+        .map(|id| id.to_string());
     let thread_id = msg
         .get("message_thread_id")
         .and_then(Value::as_i64)
@@ -273,7 +291,9 @@ mod tests {
         fn new(responses: Vec<(String, Value)>) -> (Self, StubHandle) {
             let responses = std::sync::Arc::new(Mutex::new(responses));
             let calls = std::sync::Arc::new(Mutex::new(Vec::new()));
-            let handle = StubHandle { calls: calls.clone() };
+            let handle = StubHandle {
+                calls: calls.clone(),
+            };
             (StubApi { responses, calls }, handle)
         }
     }
@@ -311,7 +331,10 @@ mod tests {
             ]
         });
         let empty = json!({ "ok": true, "result": [] });
-        let (stub, handle) = StubApi::new(vec![("getUpdates".into(), updates), ("getUpdates".into(), empty)]);
+        let (stub, handle) = StubApi::new(vec![
+            ("getUpdates".into(), updates),
+            ("getUpdates".into(), empty),
+        ]);
         let mut t = TelegramTransport::new(stub, "TOKEN");
         let msgs = GatewayTransport::poll(&mut t).await.unwrap();
         assert_eq!(msgs.len(), 2);
@@ -326,7 +349,11 @@ mod tests {
         let calls = handle.calls();
         // The LAST getUpdates call carries the advanced offset (the first poll
         // legitimately starts at 0).
-        let second = calls.iter().rev().find(|(u, _)| u.ends_with("/getUpdates")).unwrap();
+        let second = calls
+            .iter()
+            .rev()
+            .find(|(u, _)| u.ends_with("/getUpdates"))
+            .unwrap();
         assert_eq!(second.1["offset"], 44);
         assert_eq!(second.1["timeout"], POLL_TIMEOUT_SECS);
         // Long-poll state machine: no re-delivery of update 41 (offset monotonic).
@@ -347,7 +374,9 @@ mod tests {
             ("sendMessage".into(), sent.clone()),
         ]);
         let t = TelegramTransport::new(stub, "TOKEN");
-        let out = GatewayTransport::send_reply(&t, "55", &long, None).await.unwrap();
+        let out = GatewayTransport::send_reply(&t, "55", &long, None)
+            .await
+            .unwrap();
         assert!(out.chunks >= 2);
         let calls = handle.calls();
         assert_eq!(calls.len(), out.chunks);
@@ -356,8 +385,11 @@ mod tests {
             assert_eq!(payload["parse_mode"], "MarkdownV2");
             // Each chunk fits the UTF-16 cap (chunking measures raw text).
             let text = payload["text"].as_str().unwrap();
-            assert!(crate::chunking::utf16_len(text) <= MAX_MESSAGE_LENGTH,
-                "chunk over cap: {}", crate::chunking::utf16_len(text));
+            assert!(
+                crate::chunking::utf16_len(text) <= MAX_MESSAGE_LENGTH,
+                "chunk over cap: {}",
+                crate::chunking::utf16_len(text)
+            );
         }
         // The final chunk's id is the edit target (last delivered id).
         assert_eq!(out.message_ids.last().unwrap(), "99");
@@ -368,14 +400,19 @@ mod tests {
         let sent = json!({ "ok": true, "result": { "message_id": 5 } });
         // First sendMessage answers a parse failure, then any later one succeeds.
         let (stub, handle) = StubApi::new(vec![
-            ("sendMessage".into(), json!({
-                "ok": false, "error_code": 400,
-                "description": "Bad Request: can't parse entities"
-            })),
+            (
+                "sendMessage".into(),
+                json!({
+                    "ok": false, "error_code": 400,
+                    "description": "Bad Request: can't parse entities"
+                }),
+            ),
             ("sendMessage".into(), sent),
         ]);
         let t = TelegramTransport::new(stub, "TOKEN");
-        let out = GatewayTransport::send_reply(&t, "55", "plain **text**", None).await.unwrap();
+        let out = GatewayTransport::send_reply(&t, "55", "plain **text**", None)
+            .await
+            .unwrap();
         assert_eq!(out.chunks, 1);
         let calls = handle.calls();
         assert_eq!(calls.len(), 2); // MarkdownV2 attempt + plain retry
@@ -386,12 +423,13 @@ mod tests {
 
     #[tokio::test]
     async fn edit_message_treats_not_modified_as_success() {
-        let (stub, _handle) = StubApi::new(vec![
-            ("editMessageText".into(), json!({
+        let (stub, _handle) = StubApi::new(vec![(
+            "editMessageText".into(),
+            json!({
                 "ok": false, "error_code": 400,
                 "description": "Bad Request: message is not modified"
-            })),
-        ]);
+            }),
+        )]);
         let t = TelegramTransport::new(stub, "TOKEN");
         // Finalize edit: not-modified is a success no-op.
         let r = t.edit_message("55", "7", "same", true).await;

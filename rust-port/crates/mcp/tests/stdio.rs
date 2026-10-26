@@ -32,7 +32,10 @@ async fn handshake_negotiates_and_records_server_info() {
     let info = client.initialize_result.clone().expect("handshake ran");
     assert_eq!(info.protocol_version, "2025-03-26");
     assert_eq!(info.server_info.as_ref().unwrap().name, "mock-mcp");
-    assert!(client.advertises_tools(), "mock advertises the tools capability");
+    assert!(
+        client.advertises_tools(),
+        "mock advertises the tools capability"
+    );
     client.shutdown().await;
 }
 
@@ -52,7 +55,10 @@ async fn tools_list_paginates_via_cursor() {
 #[tokio::test(flavor = "multi_thread")]
 async fn tools_call_success_renders_text() {
     let mut client = connected_mock().await;
-    let result = client.call_tool("echo", &json!({"message": "hi"})).await.unwrap();
+    let result = client
+        .call_tool("echo", &json!({"message": "hi"}))
+        .await
+        .unwrap();
     assert!(!result.is_error);
     let rendered = render_call_result(&result, "mcp__mock__echo");
     assert_eq!(rendered, "you said: hi");
@@ -113,8 +119,13 @@ async fn crashed_server_surfaces_eof() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn spawn_failure_is_reported() {
-    let err = McpClient::stdio("definitely-not-a-real-binary-xyz", &[], &HashMap::new(), None)
-        .err()
-        .expect("nonexistent command must fail to spawn");
+    let err = McpClient::stdio(
+        "definitely-not-a-real-binary-xyz",
+        &[],
+        &HashMap::new(),
+        None,
+    )
+    .err()
+    .expect("nonexistent command must fail to spawn");
     assert!(err.to_string().contains("definitely-not-a-real-binary-xyz"));
 }

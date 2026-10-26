@@ -41,34 +41,101 @@ const fn def(
     args_hint: &'static str,
     busy_policy: BusyPolicy,
 ) -> CommandDef {
-    CommandDef { name, description, category, aliases, args_hint, busy_policy }
+    CommandDef {
+        name,
+        description,
+        category,
+        aliases,
+        args_hint,
+        busy_policy,
+    }
 }
 
 pub const COMMAND_REGISTRY: &[CommandDef] = &[
     // Session
-    def("new", "Start a new session (fresh session ID + history)", "Session",
-        &["reset"], "[name]", BusyPolicy::InterruptThenDispatch),
-    def("clear", "Clear screen and start a new session", "Session",
-        &[], "", BusyPolicy::Reject),
-    def("stop", "Kill all running background processes", "Session",
-        &[], "", BusyPolicy::InterruptThenDispatch),
-    def("history", "Show conversation history", "Session",
-        &[], "", BusyPolicy::Reject),
-    def("compress", "Compress conversation context (LLM summary replaces the raw turns)", "Session",
-        &["compact"], "[here [N] | --preview]", BusyPolicy::Reject),
-    def("resume", "Resume a previously-named session", "Session",
-        &[], "[name]", BusyPolicy::Reject),
-    def("sessions", "Browse and resume previous sessions", "Session",
-        &[], "[list | id-or-name]", BusyPolicy::Reject),
+    def(
+        "new",
+        "Start a new session (fresh session ID + history)",
+        "Session",
+        &["reset"],
+        "[name]",
+        BusyPolicy::InterruptThenDispatch,
+    ),
+    def(
+        "clear",
+        "Clear screen and start a new session",
+        "Session",
+        &[],
+        "",
+        BusyPolicy::Reject,
+    ),
+    def(
+        "stop",
+        "Kill all running background processes",
+        "Session",
+        &[],
+        "",
+        BusyPolicy::InterruptThenDispatch,
+    ),
+    def(
+        "history",
+        "Show conversation history",
+        "Session",
+        &[],
+        "",
+        BusyPolicy::Reject,
+    ),
+    def(
+        "compress",
+        "Compress conversation context (LLM summary replaces the raw turns)",
+        "Session",
+        &["compact"],
+        "[here [N] | --preview]",
+        BusyPolicy::Reject,
+    ),
+    def(
+        "resume",
+        "Resume a previously-named session",
+        "Session",
+        &[],
+        "[name]",
+        BusyPolicy::Reject,
+    ),
+    def(
+        "sessions",
+        "Browse and resume previous sessions",
+        "Session",
+        &[],
+        "[list | id-or-name]",
+        BusyPolicy::Reject,
+    ),
     // Configuration
-    def("model", "Switch model (session-scoped; --global to persist)", "Configuration",
-        &[], "[model]", BusyPolicy::Reject),
+    def(
+        "model",
+        "Switch model (session-scoped; --global to persist)",
+        "Configuration",
+        &[],
+        "[model]",
+        BusyPolicy::Reject,
+    ),
     // Info
-    def("help", "Show available commands", "Info",
-        &[], "", BusyPolicy::Dispatch),
+    def(
+        "help",
+        "Show available commands",
+        "Info",
+        &[],
+        "",
+        BusyPolicy::Dispatch,
+    ),
     // Exit
-    def("quit", "Exit the CLI (use --delete to also remove session history)", "Exit",
-        &["exit"], "[--delete]", BusyPolicy::Reject),
+    def(
+        "quit",
+        "Exit the CLI (use --delete to also remove session history)",
+        "Exit",
+        &["exit"],
+        "[--delete]",
+        BusyPolicy::Reject,
+    ),
 ];
 
 /// Resolve a command name or alias (leading slash optional, case-insensitive) —
@@ -76,8 +143,7 @@ pub const COMMAND_REGISTRY: &[CommandDef] = &[
 pub fn resolve_command(name: &str) -> Option<&'static CommandDef> {
     let key = name.trim().trim_start_matches('/').to_ascii_lowercase();
     COMMAND_REGISTRY.iter().find(|c| {
-        c.name.eq_ignore_ascii_case(&key)
-            || c.aliases.iter().any(|a| a.eq_ignore_ascii_case(&key))
+        c.name.eq_ignore_ascii_case(&key) || c.aliases.iter().any(|a| a.eq_ignore_ascii_case(&key))
     })
 }
 
@@ -114,7 +180,10 @@ pub fn parse_line(line: &str) -> ParsedLine {
     }
     let (name, args) = split_name_args(trimmed);
     match resolve_command(name) {
-        Some(def) => ParsedLine::Command(Invocation { def, args: args.to_string() }),
+        Some(def) => ParsedLine::Command(Invocation {
+            def,
+            args: args.to_string(),
+        }),
         None => ParsedLine::Unknown(trimmed.to_string()),
     }
 }
@@ -218,7 +287,10 @@ mod tests {
         assert_eq!(mid_turn_action("/help"), MidTurn::Dispatch);
         assert_eq!(mid_turn_action("/model x"), MidTurn::Busy("/model".into()));
         assert_eq!(mid_turn_action("/nosuch"), MidTurn::Busy("/nosuch".into()));
-        assert_eq!(mid_turn_action("hello there"), MidTurn::Queue("hello there".into()));
+        assert_eq!(
+            mid_turn_action("hello there"),
+            MidTurn::Queue("hello there".into())
+        );
     }
 
     #[test]
@@ -226,7 +298,10 @@ mod tests {
         let help = render_help();
         assert!(help.contains("/resume [name] — Resume a previously-named session"));
         // Aliases render right after the name, before the args hint.
-        assert!(help.contains("/compress /compact [here [N] | --preview]"), "got: {help}");
+        assert!(
+            help.contains("/compress /compact [here [N] | --preview]"),
+            "got: {help}"
+        );
         assert!(help.contains("/exit"));
         assert!(help.contains("\n  Session\n"), "got: {help}");
         assert!(help.contains("\n  Exit\n"));

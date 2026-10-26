@@ -87,7 +87,30 @@ pub trait GatewayTransport: Send + Sync {
 pub trait HttpBackend: Send + Sync + 'static {
     /// POST a JSON body to `url` and parse the JSON response. Non-success
     /// payloads are returned as `Err` with the platform's error text.
-    fn post_json<'a>(&'a self, url: String, payload: serde_json::Value) -> BoxFut<'a, Result<serde_json::Value>>;
+    fn post_json<'a>(
+        &'a self,
+        url: String,
+        payload: serde_json::Value,
+    ) -> BoxFut<'a, Result<serde_json::Value>>;
+
+    /// POST a multipart form (the Slack `files_upload_v2` binary lane):
+    /// `fields` are plain text parts, then one binary part `filename` +
+    /// `content`. Returns the response body text (the Slack upload endpoint
+    /// answers plain `OK`, not JSON). JSON-only backends default to a clear
+    /// error.
+    fn post_multipart<'a>(
+        &'a self,
+        _url: String,
+        _fields: Vec<(String, String)>,
+        _filename: String,
+        _content: Vec<u8>,
+    ) -> BoxFut<'a, Result<String>> {
+        Box::pin(async move {
+            Err(anyhow::anyhow!(
+                "multipart upload not supported by this HTTP backend"
+            ))
+        })
+    }
 }
 
 /// Production backend over the shared `reqwest::Client`.
@@ -101,18 +124,28 @@ pub struct ReqwestBackend {
 impl ReqwestBackend {
     /// One client per process (connection pooling), as in the Python adapters.
     pub fn shared() -> Self {
-        ReqwestBackend { http: reqwest::Client::new(), bearer: None }
+        ReqwestBackend {
+            http: reqwest::Client::new(),
+            bearer: None,
+        }
     }
 
     /// Client pre-configured with an `Authorization: Bearer` header
     /// (Discord bot token / Slack bot token).
     pub fn with_bearer(token: &str) -> Self {
-        ReqwestBackend { http: reqwest::Client::new(), bearer: Some(token.to_string()) }
+        ReqwestBackend {
+            http: reqwest::Client::new(),
+            bearer: Some(token.to_string()),
+        }
     }
 }
 
 impl HttpBackend for ReqwestBackend {
-    fn post_json<'a>(&'a self, url: String, payload: serde_json::Value) -> BoxFut<'a, Result<serde_json::Value>> {
+    fn post_json<'a>(
+        &'a self,
+        url: String,
+        payload: serde_json::Value,
+    ) -> BoxFut<'a, Result<serde_json::Value>> {
         Box::pin(async move {
             let mut req = self.http.post(url).json(&payload);
             if let Some(token) = &self.bearer {
@@ -121,6 +154,40 @@ impl HttpBackend for ReqwestBackend {
             let resp = req.send().await?;
             let status = resp.status();
             let body: serde_json::Value = resp.json().await?;
+            if !status.is_success() {
+                anyhow::bail!("HTTP {}: {}", status, body);
+            }
+            Ok(body)
+        })
+    }
+
+    fn post_multipart<'a>(
+        &'a self,
+        url: String,
+        fields: Vec<(String, String)>,
+        filename: String,
+        content: Vec<u8>,
+    ) -> BoxFut<'a, Result<String>> {
+        Box::pin(async move {
+            let mut req = self.http.post(url);
+            for (k, v) in &fields {
+                req = req.header(k.as_str(), v.as_str());
+            }
+            // Multipart parts: text fields first, then the binary file part.
+            let mut m = reqwest::multipart::Form::new();
+            for (k, v) in fields {
+                m = m.part(k, reqwest::multipart::Part::text(v));
+            }
+            m = m.part(
+                "file",
+                reqwest::multipart::Part::bytes(content)
+                    .file_name(filename)
+                    .mime_str("application/octet-stream")?,
+            );
+            req = req.multipart(m);
+            let resp = req.send().await?;
+            let status = resp.status();
+            let body = resp.text().await?;
             if !status.is_success() {
                 anyhow::bail!("HTTP {}: {}", status, body);
             }

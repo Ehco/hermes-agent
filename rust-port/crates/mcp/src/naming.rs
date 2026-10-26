@@ -17,7 +17,13 @@ const MCP_TOOL_NAME_HASH_LENGTH: usize = 8;
 pub fn sanitize_name_component(value: &str) -> String {
     value
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -35,10 +41,7 @@ pub fn prefixed_tool_name(server_name: &str, tool_name: &str) -> String {
         return full_name;
     }
     let digest = Sha256::digest(bytes);
-    let suffix = format!(
-        "_{}",
-        hex(&digest)[..MCP_TOOL_NAME_HASH_LENGTH].to_string()
-    );
+    let suffix = format!("_{}", hex(&digest)[..MCP_TOOL_NAME_HASH_LENGTH].to_string());
     let keep = MCP_TOOL_NAME_MAX_LENGTH - suffix.len();
     // Slice on char boundaries (sanitized names are ASCII, but stay safe).
     let mut end = keep;
@@ -58,7 +61,10 @@ mod tests {
 
     #[test]
     fn basic_namespacing() {
-        assert_eq!(prefixed_tool_name("github", "create_issue"), "mcp__github__create_issue");
+        assert_eq!(
+            prefixed_tool_name("github", "create_issue"),
+            "mcp__github__create_issue"
+        );
     }
 
     #[test]

@@ -124,7 +124,10 @@ fn protect_fenced(text: &str, ph: &mut Placeholders) -> String {
                     let mut body = body.join("\n");
                     // MarkdownV2 inside pre: escape \, ` and _ (the wave's
                     // contract — see code_is_protected_from_escaping).
-                    body = body.replace('\\', "\\\\").replace('`', "\\`").replace('_', "\\_");
+                    body = body
+                        .replace('\\', "\\\\")
+                        .replace('`', "\\`")
+                        .replace('_', "\\_");
                     let opening = format!("{}{}{}", prefix, "```", lang_and_nl);
                     let stash = if body.is_empty() {
                         format!("{}{}{}", opening, "\n", lines[close_idx])
@@ -156,8 +159,16 @@ fn escape_bare_brackets(text: &str) -> String {
         last = m.end();
     }
     parts.push(text[last..].to_string());
-    parts.into_iter().enumerate()
-        .map(|(idx, seg)| if idx % 2 == 1 { seg } else { escape_bare_brackets_seg(&seg) })
+    parts
+        .into_iter()
+        .enumerate()
+        .map(|(idx, seg)| {
+            if idx % 2 == 1 {
+                seg
+            } else {
+                escape_bare_brackets_seg(&seg)
+            }
+        })
         .collect()
 }
 
@@ -286,7 +297,10 @@ pub fn format_message(content: &str) -> String {
     let header_re = Regex::new(r"(?m)^#{1,6}\s+(.+)$").unwrap();
     text = header_re
         .replace_all(&text, |m: &regex::Captures| {
-            let inner = Regex::new(r"\*\*(.+?)\*\*").unwrap().replace_all(m[1].trim(), "$1").to_string();
+            let inner = Regex::new(r"\*\*(.+?)\*\*")
+                .unwrap()
+                .replace_all(m[1].trim(), "$1")
+                .to_string();
             ph.add(format!("*{}*", escape_mdv2(&inner)))
         })
         .to_string();
@@ -312,15 +326,21 @@ pub fn format_message(content: &str) -> String {
     // 8) ||spoiler|| kept as-is.
     let bold_re = Regex::new(r"\*\*(.+?)\*\*").unwrap();
     text = bold_re
-        .replace_all(&text, |m: &regex::Captures| ph.add(format!("*{}*", escape_mdv2(&m[1]))))
+        .replace_all(&text, |m: &regex::Captures| {
+            ph.add(format!("*{}*", escape_mdv2(&m[1])))
+        })
         .to_string();
     let ital_re = Regex::new(r"\*([^*\n]+)\*").unwrap();
     text = ital_re
-        .replace_all(&text, |m: &regex::Captures| ph.add(format!("_{}_", escape_mdv2(&m[1]))))
+        .replace_all(&text, |m: &regex::Captures| {
+            ph.add(format!("_{}_", escape_mdv2(&m[1])))
+        })
         .to_string();
     let strike_re = Regex::new(r"~~(.+?)~~").unwrap();
     text = strike_re
-        .replace_all(&text, |m: &regex::Captures| ph.add(format!("~{}~", escape_mdv2(&m[1]))))
+        .replace_all(&text, |m: &regex::Captures| {
+            ph.add(format!("~{}~", escape_mdv2(&m[1])))
+        })
         .to_string();
     let spoiler_re = Regex::new(r"\|\|(.+?)\|\|").unwrap();
     text = spoiler_re
@@ -337,11 +357,19 @@ pub fn format_message(content: &str) -> String {
             let prefix = &m[1];
             let content = &m[2];
             if prefix.starts_with("**") && content.ends_with("||") {
-                ph.add(format!("{} {}||", prefix, escape_mdv2(&content[..content.len() - 2])))
+                ph.add(format!(
+                    "{} {}||",
+                    prefix,
+                    escape_mdv2(&content[..content.len() - 2])
+                ))
             } else if prefix.starts_with("**") && content.ends_with("**") {
                 // Expandable quote closed by the trailing ** — keep the marker
                 // verbatim (blockquotes_protect_angle).
-                ph.add(format!("{} {}**", prefix, escape_mdv2(&content[..content.len() - 2])))
+                ph.add(format!(
+                    "{} {}**",
+                    prefix,
+                    escape_mdv2(&content[..content.len() - 2])
+                ))
             } else {
                 ph.add(format!("{} {}", prefix, escape_mdv2(content)))
             }
@@ -366,8 +394,10 @@ mod tests {
 
     #[test]
     fn escape_table_matches_python_set() {
-        assert_eq!(escape_mdv2("a_b*c[d]e(f)g~h`i>j#k+l-m=n|o{p}q.r!s\\t"),
-            "a\\_b\\*c\\[d\\]e\\(f\\)g\\~h\\`i\\>j\\#k\\+l\\-m\\=n\\|o\\{p\\}q\\.r\\!s\\\\t");
+        assert_eq!(
+            escape_mdv2("a_b*c[d]e(f)g~h`i>j#k+l-m=n|o{p}q.r!s\\t"),
+            "a\\_b\\*c\\[d\\]e\\(f\\)g\\~h\\`i\\>j\\#k\\+l\\-m\\=n\\|o\\{p\\}q\\.r\\!s\\\\t"
+        );
         assert_eq!(escape_mdv2("plain text 123"), "plain text 123");
         assert_eq!(escape_mdv2(""), "");
     }
@@ -378,7 +408,10 @@ mod tests {
         assert_eq!(format_message("*ital*"), "_ital_");
         assert_eq!(format_message("~~gone~~"), "~gone~");
         assert_eq!(format_message("||shh||"), "||shh||");
-        assert_eq!(format_message("snake_case survives"), "snake\\_case survives");
+        assert_eq!(
+            format_message("snake_case survives"),
+            "snake\\_case survives"
+        );
     }
 
     #[test]
@@ -389,19 +422,28 @@ mod tests {
 
     #[test]
     fn links_escape_url_parens_only() {
-        assert_eq!(format_message("[docs](https://x.io/a(b))"), "[docs](https://x.io/a(b\\))");
+        assert_eq!(
+            format_message("[docs](https://x.io/a(b))"),
+            "[docs](https://x.io/a(b\\))"
+        );
         // Display text is escaped.
-        assert_eq!(format_message("[a_b](https://x.io)"), "[a\\_b](https://x.io)");
+        assert_eq!(
+            format_message("[a_b](https://x.io)"),
+            "[a\\_b](https://x.io)"
+        );
     }
 
     #[test]
     fn code_is_protected_from_escaping() {
-        assert_eq!(format_message("use `fn main()` now"),
-            "use `fn main()` now");
-        assert_eq!(format_message("```\nlet x = a_b;\n```"),
-            "```\nlet x = a\\_b;\n```");
-        assert_eq!(format_message("```rust\nlet s = \"`\";\n```"),
-            "```rust\nlet s = \"\\`\";\n```");
+        assert_eq!(format_message("use `fn main()` now"), "use `fn main()` now");
+        assert_eq!(
+            format_message("```\nlet x = a_b;\n```"),
+            "```\nlet x = a\\_b;\n```"
+        );
+        assert_eq!(
+            format_message("```rust\nlet s = \"`\";\n```"),
+            "```rust\nlet s = \"\\`\";\n```"
+        );
     }
 
     #[test]
@@ -422,7 +464,11 @@ mod tests {
     fn tables_become_fenced_rows() {
         let out = format_message("| a | b |\n| --- | --- |\n| 1 | 2 |");
         assert!(out.starts_with("```\n| "), "{}", out);
-        assert!(out.contains("| 1    | 2  |") || out.contains("| 1 "), "{}", out);
+        assert!(
+            out.contains("| 1    | 2  |") || out.contains("| 1 "),
+            "{}",
+            out
+        );
     }
 
     #[test]
@@ -437,4 +483,3 @@ mod tests {
         assert_eq!(strip_mdv2("snake_case"), "snake_case");
     }
 }
-

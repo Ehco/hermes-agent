@@ -127,7 +127,10 @@ mod tests {
         let am = default_allowed_mentions();
         // everyone/roles denied (absent from `parse`), user + replied-user pings on.
         let parse = am["parse"].as_array().unwrap();
-        assert_eq!(parse, &serde_json::json!(["users"]).as_array().unwrap().clone());
+        assert_eq!(
+            parse,
+            &serde_json::json!(["users"]).as_array().unwrap().clone()
+        );
         assert_eq!(am["replied_user"], true);
         assert!(am.get("everyone").is_none() || am["everyone"] == false);
         assert!(am.get("roles").is_none() || am["roles"] == false);

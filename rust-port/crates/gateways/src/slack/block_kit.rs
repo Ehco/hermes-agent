@@ -100,10 +100,7 @@ pub fn render_blocks(content: &str) -> Option<Vec<Block>> {
             let indent_of = |l: &str| -> usize {
                 let re = if is_ordered { &ordered_re } else { &bullet_re };
                 let spaces = re.captures(l).unwrap().get(1).unwrap().as_str();
-                let width: usize = spaces
-                    .chars()
-                    .map(|c| if c == '\t' { 4 } else { 1 })
-                    .sum();
+                let width: usize = spaces.chars().map(|c| if c == '\t' { 4 } else { 1 }).sum();
                 (width / 2).min(5)
             };
             let base_indent = indent_of(line);
@@ -113,7 +110,11 @@ pub fn render_blocks(content: &str) -> Option<Vec<Block>> {
             let mut j = i;
             while j < lines.len() {
                 let l = lines[j];
-                let matches_list = if is_ordered { ordered_re.is_match(l) } else { bullet_re.is_match(l) };
+                let matches_list = if is_ordered {
+                    ordered_re.is_match(l)
+                } else {
+                    bullet_re.is_match(l)
+                };
                 if !matches_list {
                     break;
                 }
@@ -171,7 +172,10 @@ pub fn render_blocks(content: &str) -> Option<Vec<Block>> {
     // the Slack caps degrades the whole render to the plain-text path.
     for b in &blocks {
         if b["type"] == "section" {
-            let len = b["text"]["text"].as_str().map(|s| s.chars().count()).unwrap_or(0);
+            let len = b["text"]["text"]
+                .as_str()
+                .map(|s| s.chars().count())
+                .unwrap_or(0);
             if len > MAX_SECTION_TEXT {
                 return None;
             }
@@ -280,10 +284,7 @@ mod tests {
     fn lists_group_with_nesting() {
         let md = "- one\n- two\n  - nested\n- three";
         let blocks = render_blocks(md).unwrap();
-        let lists: Vec<&Block> = blocks
-            .iter()
-            .filter(|b| b["type"] == "rich_text")
-            .collect();
+        let lists: Vec<&Block> = blocks.iter().filter(|b| b["type"] == "rich_text").collect();
         assert_eq!(lists.len(), 2); // indent 0 run (3 items) + indent 1 run (1 item)
         let e0 = lists[0]["elements"].as_array().unwrap();
         assert_eq!(e0[0]["type"], "rich_text_list");
