@@ -49,3 +49,68 @@ the ported surface: `tools/`, `agent/`, `tui_gateway/`, `gateway/platforms/`,
   `crates/tools/src/skills.rs`. No git repo in `hermes-rs` (files left on disk).
 - The guarded live repo (`AppData/Local/hermes/hermes-agent`) was not touched; the
   token in `~/.git-credentials` was never printed (clone output redacted).
+
+---
+
+## W24 — upstream re-sync (2026-10-26, second wave same day)
+
+Fresh blobless clone at `AppData/Local/hermes/scratch/upstream-clone2/` (HEAD
+`c714c42431`). `git log --oneline daec3cd4c6..HEAD` → **91 commits** (dense webapp/
+desktop day upstream). **No Rust code changes were required this wave**: every
+behavioral commit lands in webapp/desktop internals, test/docs/deps churn, or Python
+machinery the Rust port does not carry. Per-file diff review of the ported surface
+(`tools/`, `agent/`, `tui_gateway/`, `gateway/platforms/`, `hermes_cli/`,
+`plugins/`) found exactly six source files touched, mapped below.
+
+### Ported-surface files — reviewed, no Rust delta (machinery not ported)
+
+| Upstream commit | Python change | Why no Rust delta |
+|---|---|---|
+| `3226ddd8a5` fix(windows): keep a review tree from taking over the home's hermes command | `hermes_cli/_launchers.py`: `expose_cli` on a non-home checkout leaves `<home>\bin` launchers that start another living checkout in place (new `_launcher_checkout`/`_launcher_of_another_checkout`/`_is_home_checkout`); missing/foreign-dead launchers still replaced, the home's own checkout still republishes. | The Rust port is a native binary; the checkout-launcher publishing machinery (`expose_cli`, `_publish_conveniences`, PATHEXT `.exe`/`.cmd` launchers) has no Rust counterpart. |
+| `9ed6c20651` fix(dashboard-auth): give every password-provider session its own tokens | `plugins/dashboard_auth/basic`: `_mint_session` embeds a random `jti` (and `exp`-second reuse) in both signed tokens so same-second logins get distinct pairs; verification unchanged. | The Rust listener authenticates browsers with the stored session token itself (`crates/gateway/src/webapp/credential.rs`); BasicAuthProvider's signed access/refresh token minting is not ported. |
+
+### Deferred (upstream subsystems; shas for the record)
+
+- **Webapp profile multiplexing / session authorities** — served-profile-set cache,
+  unserved dials, boot-on-served-profile, picker greying: `8bfff4e273`, `ad03c02014`,
+  `b65111aad5`, `99b7565030`, `4f7988a541`, `5a57936c53`, `562d95142c`, `ce4bf05b74`,
+  `26005015f8`, `f87ca06826`, `b5b28309f8`, `c714c42431`, `589f3daf97`; held-frame
+  bound + drop-at-disconnect + starting-profile waits in `tui_gateway/ws.py` +
+  `gateway/session_authorities.py`/`session_ancillary.py`/`session_controls.py`/
+  `run_idle_exit.py`: `32c03ed88d`, `422f2f8456`, `83ad726672`, `cedc564279`,
+  `f968aa7304`, `2127cddbbd`, `41715be2f8`. The Rust `crates/gateway` desktop API is
+  single-profile (`"profile": "default"`) with an arrival-order dispatcher — no held
+  lanes/authority connection to bound.
+- **Webapp profile prefs/folders + journal/send + host terminal + download tickets**
+  — `cd4f55a593`, `514b95b451`, `6f2ec72cf7`, `07aa617860`, `a3928dfca6`,
+  `5d9ce70cd6`, `8295aae6ee`, `8e657b956c`, `845b0755ed`, `a357681674`;
+  `9a290094bd`, `a0e0b72e3b`, `122d14b791`, `0733c281d6`, `371208bb7a`,
+  `1c6871dc55`, `be7cb86be2`, `9ab5fd2ffb`, `cb30903f6d`, `4d8665896c`;
+  `hermes_cli/web_host_terminal_sessions.py`: `0cb2f60ac0`, `46da66c337`,
+  `252dbe786d`, `43a6470629`, `eda711a5e2`, `d11ff5fb00`, `27e8dbefea`;
+  `hermes_cli/web_server_file_tickets.py`: `a3848f78e8`, `11cbd54d50` — webapp
+  internals, deferred wholesale per the standing scope.
+- **SSH workspace file serving** (`hermes_cli/ssh_workspace_fs.py`) — shared-endpoint
+  control-socket teardown, replaced-connection close, down-host stall, plain-Lock:
+  `140560affc`, `302fd07584`, `2db4a5262b`, `7b95bb857b` (+tests `dfa7bd3cf8`,
+  `64e0b3860a`) — deferred (gateway web surface).
+- **Desktop app** — composer draft save/merge across windows (`a950eff764`,
+  `e3d5e8c559`, `2406af9920`, `3a818997d7`, `512d8513b7`, `dc23156e1e`), sticky-prompt
+  clip/touch (`2cf5948986`, `e136b4894c`, `b8229d3b8d`, `6b27ff58bc`, `16672947ff`,
+  `e5f2b15300`), translucency fallback (`8da9e0b432`, `b5868c1f62`), perf
+  (`e03c9c668b`, `15732642b0`) — desktop internals, deferred.
+- **Plugin-catalog pins** — `aa910ca036` (gonogo v0.3.0, thomas v0.1.3),
+  `9976f4857b` (loreconvo 0.10.19): no plugin catalog in the Rust workspace.
+- **Chore/deps** — `bb6986f4d9` (brotlicffi 1.2.1.0), `e42cd9d814` (mailmap),
+  `edfa1c2a13` (merge), uv.lock/pyproject, i18n keys: ignored.
+- Tests-only churn (`27e8dbefea`, `795e9ca42c`, `6ec5ef6720`, `e6ab8816a4`,
+  `cb30903f6d`, `4d8665896c`, `b4fa58b262`, `4b4e6e06ab`, `faa7c9c38e`,
+  `64e0b3860a`, `dfa7bd3cf8`, `27e8dbefea`, `d49e2ebbae`, `e4bc96b813`,
+  `25db5877c1`, `626d7a21a1`, `5712ae891c`, `e9deeb1a15`, `e5f2b15300`,
+  `16672947ff`, `1c6871dc55`, `d11ff5fb00`, `122d14b791`, `41715be2f8`,
+  `589f3daf97`) and docs: ignored per task rules.
+
+### Verification
+- No Rust files touched this wave (see table above); workspace state unchanged from
+  the W23 sync. `cargo build` and `cargo test` re-run green (windows-gnu PATH
+  prefix): 37 test binaries, **815 passed, 0 failed, 4 ignored**.
