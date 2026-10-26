@@ -655,6 +655,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "hermes-plugins"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "futures",
+ "http-body-util",
+ "hyper",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "tower",
+]
+
+[[package]]
 name = "hermes-schedulers"
 version = "0.1.0"
 dependencies = [
