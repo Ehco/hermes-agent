@@ -590,34 +590,41 @@ fn first_sentence_end(text: &str) -> Option<usize> {
 
 fn render_group(label: &str, tools: &[(String, String)], mode: &str) -> String {
     // Render one server's block. mode: "full" | "names" | "summary".
-    let tools: Vec<&(String, String)> = tools.iter().collect();
-    match mode {
-        "summary" => format!(
+    if mode == "summary" {
+        return format!(
             "{label} ({} tools — names not listed; discover via `{TOOL_SEARCH_NAME}`)",
             tools.len()
-        ),
-        _ => {
-            let mut lines = vec![format!("{label} tools ({}):", tools.len())];
-            if mode == "full" {
-                for (name, desc) in tools {
-                    if desc.is_empty() {
-                        lines.push(format!("- {name}"));
-                    } else {
-                        lines.push(format!("- {name}: {desc}"));
-                    }
-                }
-            } else {
-                lines.push(
-                    tools
-                        .iter()
-                        .map(|(n, _)| n.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                );
-            }
-            lines.join("\n")
-        }
+        );
     }
+    let lines: Vec<String> = if mode == "full" {
+        tools
+            .iter()
+            .map(|(name, desc)| {
+                if desc.is_empty() {
+                    format!("- {name}")
+                } else {
+                    format!("- {name}: {desc}")
+                }
+            })
+            .collect()
+    } else if tools.len() > 1 {
+        vec![tools
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")]
+    } else {
+        // Single-tool group renders as a bare line, no heading.
+        vec![format!("- {}", tools[0].0)]
+    };
+    // A one-tool group's "<label> tools (1):" heading says nothing its single
+    // line does not — drop it (upstream 079b38cd07).
+    if tools.len() == 1 {
+        return lines.join("\n");
+    }
+    let mut out = vec![format!("{label} tools ({}):", tools.len())];
+    out.extend(lines);
+    out.join("\n")
 }
 
 /// Render the deferred-catalog manifest: `- name: short desc` lines grouped per
@@ -664,11 +671,22 @@ pub fn build_catalog_listing_with_form(
     );
 
     let fits = |modes: &std::collections::BTreeMap<String, String>| -> Option<String> {
+        // Headless one-tool lines go first, straight under the catalog header:
+        // placed between groups they would read as members of the group above
+        // them (upstream 079b38cd07).
+        let singles: Vec<&String> = groups
+            .keys()
+            .filter(|label| groups[*label].len() == 1 && modes[*label] != "summary")
+            .collect();
         let blocks: Vec<String> = groups
             .keys()
+            .filter(|label| groups[*label].len() > 1 || modes[*label] == "summary")
             .map(|label| render_group(label, &groups[label], &modes[label]))
             .collect();
         let text = std::iter::once(header.clone())
+            .chain(singles.iter().map(|label| {
+                render_group(label, &groups[*label], &modes[*label])
+            }))
             .chain(blocks)
             .collect::<Vec<_>>()
             .join("\n");
@@ -684,29 +702,39 @@ pub fn build_catalog_listing_with_form(
         }
     }
     // 3. Collapse the LARGEST rendered groups first (deterministic: size then
-    // label).
-    let mut modes = groups
-        .keys()
-        .map(|k| (k.clone(), "names".into()))
-        .collect::<std::collections::BTreeMap<_, _>>();
+    // label); the servers left uncollapsed get their full lines back when those
+    // fit, else names-only (upstream 079b38cd07).
     let mut order: Vec<&String> = groups.keys().collect();
     order.sort_by(|a, b| {
         let sa = render_group(a, &groups[a.as_str()], "names").len();
         let sb = render_group(b, &groups[b.as_str()], "names").len();
         sb.cmp(&sa).then_with(|| a.cmp(b))
     });
+    let mut summarized: std::collections::BTreeSet<String> = Default::default();
     for lbl in order {
-        modes.insert(lbl.clone(), "summary".into());
-        if let Some(text) = fits(&modes) {
-            let all_summary = modes.values().all(|m| m == "summary");
-            return (
-                Some(text),
-                if all_summary {
-                    "groups".into()
-                } else {
-                    "mixed".into()
-                },
-            );
+        summarized.insert(lbl.clone());
+        for rest in ["full", "names"] {
+            let modes = groups
+                .keys()
+                .map(|k| {
+                    let m = if summarized.contains(k) {
+                        "summary"
+                    } else {
+                        rest
+                    };
+                    (k.clone(), m.into())
+                })
+                .collect();
+            if let Some(text) = fits(&modes) {
+                return (
+                    Some(text),
+                    if summarized.len() == groups.len() {
+                        "groups".into()
+                    } else {
+                        "mixed".into()
+                    },
+                );
+            }
         }
     }
     (None, "none".into())
@@ -819,7 +847,7 @@ fn bridge_schema(name: &str, description: &str, properties: Value, required: &[&
     })
 }
 
-const CONNECTIONS_HINT: &str = " `connectors__` names are tools of the user's app accounts (Gmail, Linear, ...); `manage_connections` checks or authorizes an account.";
+const CONNECTIONS_HINT: &str = " Searches also cover the user's connected app accounts, whose tools are hosted and so never listed here (results named `connectors__<app>__<tool>`); `manage_connections` checks or connects an account.";
 
 fn search_description(
     deferred_count: usize,
@@ -1682,6 +1710,42 @@ mod tests {
         let (text, form) = build_catalog_listing_with_form(&gmail_like(), 0);
         assert_eq!(form, "none");
         assert!(text.is_none());
+    }
+
+    #[test]
+    fn step3_collapse_keeps_small_servers_full_and_one_tool_groups_headless() {
+        // Upstream 079b38cd07: an 832-tool server plus small servers — once the
+        // huge one is summarized, the rest get their FULL lines back when they
+        // fit (previously stuck names-only).
+        let mut defs = Vec::new();
+        for i in 0..200 {
+            defs.push(def(
+                &format!("mcp__unreal__tool_number_{i}"),
+                &format!("Does Unreal thing {i}."),
+                json!({}),
+            ));
+        }
+        for i in 0..3 {
+            defs.push(def(
+                &format!("mcp__meshy__tool_{i}"),
+                &format!("Meshy op {i}."),
+                json!({}),
+            ));
+        }
+        defs.push(def("mcp__blender__only", "Blender's single tool.", json!({})));
+        let (text, form) = build_catalog_listing_with_form(&defs, 500);
+        let text = text.unwrap();
+        assert_eq!(form, "mixed", "{text}");
+        // The huge server collapsed to its summary line…
+        assert!(text.contains("unreal (200 tools — names not listed;"));
+        // …while a small server kept its full per-tool lines with the heading…
+        assert!(text.contains("meshy tools (3):"));
+        assert!(text.contains("- mcp__meshy__tool_0: Meshy op 0."));
+        // …and the one-tool group is headless, right under the header.
+        assert!(text.contains("- mcp__blender__only: Blender's single tool."));
+        assert!(!text.contains("blender tools (1):"));
+        let after_header = text.split_once("):").unwrap().1;
+        assert!(after_header.trim_start_matches('\n').starts_with("- mcp__blender__only"));
     }
 
     #[test]

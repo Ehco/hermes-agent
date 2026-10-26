@@ -11,7 +11,9 @@
 //! `"No operations were applied (batch is all-or-nothing)."`. Divergence from
 //! the Python: the budget is checked per applied op rather than only on the
 //! final result, so an add-alone-overflows batch must still order removals
-//! first (the common consolidation shape works unchanged).
+//! first (the common consolidation shape works unchanged). Like the Python
+//! (#103419, upstream faef4e0ab8), a batch that would empty a non-empty store
+//! is refused — except a one-item remove, the deliberate single delete.
 //!
 //! Success: `{"success": true, "message", "usage", "entry_count", ...}`.
 //! Failure: `{"success": false, "error", ...}` with `current_entries` /
@@ -242,6 +244,10 @@ fn apply_batch(store: &mut MemoryStore, dir: &Path, target: Target, ops: &[Value
         (mem_path.clone(), fs::read(&mem_path).ok()),
         (user_path.clone(), fs::read(&user_path).ok()),
     ];
+    let had_entries = match target {
+        Target::Memory => !store.memory_entries.is_empty(),
+        Target::User => !store.user_entries.is_empty(),
+    };
 
     for (index, op) in ops.iter().enumerate() {
         let op = match op {
@@ -335,6 +341,32 @@ fn apply_batch(store: &mut MemoryStore, dir: &Path, target: Target, ops: &[Value
             };
             return abort_batch(&snapshot, store, target, &msg, class, closest);
         }
+    }
+    // #103419: a consolidation batch that removes the last entry would commit
+    // an empty file as a normal successful write. Refuse; a batch of exactly
+    // one remove is the deliberate single delete (upstream faef4e0ab8).
+    let now_empty = match target {
+        Target::Memory => store.memory_entries.is_empty(),
+        Target::User => store.user_entries.is_empty(),
+    };
+    if had_entries
+        && now_empty
+        && !(ops.len() == 1 && ops[0].get("action").and_then(Value::as_str) == Some("remove"))
+    {
+        let label = if target == Target::User { "USER.md" } else { "MEMORY.md" };
+        return abort_batch(
+            &snapshot,
+            store,
+            target,
+            &format!(
+                "Refusing to empty {label}: this batch would remove every entry from a \
+                 previously non-empty store. Keep at least one entry — merge overlapping \
+                 entries into a shorter one instead of removing the last one. To delete the \
+                 final entry deliberately, remove it alone in a one-item batch."
+            ),
+            "would_empty",
+            None,
+        );
     }
     json!({
         "success": true,
@@ -497,6 +529,36 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Invalid memory target 'wallet'"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn batch_would_empty_guard_and_one_item_remove_exemption() {
+        let dir = tmp_dir();
+        // Seed two entries, then a batch removing both is refused with would_empty.
+        execute_in(&dir, &json!({"target": "memory", "action": "add", "content": "entry one"}));
+        execute_in(&dir, &json!({"target": "memory", "action": "add", "content": "entry two"}));
+        let out = execute_in(
+            &dir,
+            &json!({"target": "memory", "operations": [
+                {"action": "remove", "old_text": "entry one"},
+                {"action": "remove", "old_text": "entry two"},
+            ]}),
+        );
+        let parsed = parse(&out);
+        assert_eq!(parsed["success"], false, "{out}");
+        assert!(parsed["error"].as_str().unwrap().contains("Refusing to empty MEMORY.md"), "{out}");
+        // The store is unchanged and both entries are still there.
+        let raw = fs::read_to_string(dir.join("MEMORY.md")).unwrap();
+        assert_eq!(parse_entries(&raw), vec!["entry one", "entry two"]);
+        // A one-item remove batch IS the deliberate delete and succeeds.
+        let out = execute_in(
+            &dir,
+            &json!({"target": "memory", "operations": [{"action": "remove", "old_text": "entry one"}]}),
+        );
+        assert_eq!(parse(&out)["success"], true, "{out}");
+        let raw = fs::read_to_string(dir.join("MEMORY.md")).unwrap();
+        assert_eq!(parse_entries(&raw), vec!["entry two"]);
         let _ = fs::remove_dir_all(&dir);
     }
 

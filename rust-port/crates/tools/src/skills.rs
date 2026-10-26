@@ -475,6 +475,68 @@ fn validate_content_size(content: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Width the skill index shows (`agent/skill_utils.py::SKILL_PROMPT_DESC_LIMIT`).
+const SKILL_PROMPT_DESC_LIMIT: usize = 60;
+
+/// Normalized frontmatter description of a SKILL.md text; None when absent or
+/// unparseable (Python `_description_of`).
+fn description_of(content: &str) -> Option<String> {
+    let rest = content.trim_start_matches('\u{feff}').strip_prefix("---")?;
+    let end = rest.find("\n---")?;
+    let mut description: Option<String> = None;
+    for line in rest[..end].lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if key.trim() == "description" {
+            description = Some(unquote(value.trim()));
+        }
+    }
+    let desc = description?;
+    let trimmed = desc.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// A description written by this call (a create, or a write that changes it
+/// from the one in `before`) must fit SKILL_PROMPT_DESC_LIMIT, the width the
+/// skill index shows. An unchanged legacy over-limit description stays
+/// editable: a body patch must not be blocked by an old frontmatter
+/// (Python `_description_budget_error`, upstream df92e33081).
+fn description_budget_error(content: &str, before: Option<&str>) -> Option<String> {
+    let desc = description_of(content).unwrap_or_default();
+    if desc.chars().count() <= SKILL_PROMPT_DESC_LIMIT
+        || before
+            .and_then(description_of)
+            .as_deref()
+            .is_some_and(|b| b == desc)
+    {
+        return None;
+    }
+    Some(format!(
+        "Description is {} chars; a skill description must fit the \
+         {SKILL_PROMPT_DESC_LIMIT}-char skill index (one sentence, trigger first, ends with a \
+         period, without repeating the category name). The index clips anything longer. \
+         Move detail into the skill body.",
+        desc.chars().count()
+    ))
+}
+
+/// The description budget for the root SKILL.md, whichever action and
+/// file_path reach it (Python `_guarded_write`). Read-before-write: `before`
+/// is the original content so unchanged legacy descriptions stay editable.
+fn check_root_skill_description(dir: &Path, target: &Path, content: &str) -> Result<(), String> {
+    if target != dir.join("SKILL.md") {
+        return Ok(());
+    }
+    let before = std::fs::read(target)
+        .ok()
+        .map(|b| String::from_utf8_lossy(&b).trim_start_matches('\u{feff}').to_string());
+    if let Some(err) = description_budget_error(content, before.as_deref()) {
+        return Err(err);
+    }
+    Ok(())
+}
+
 /// write_file/remove_file path rule: under an allowed subdir (SKILL.md at the
 /// skill root accepted), no traversal.
 pub fn validate_file_path(file_path: &str) -> Result<(), String> {
@@ -697,6 +759,9 @@ fn apply_op(root: &Path, op: &Value) -> Result<Value, String> {
             if let Err(e) = validate_frontmatter(content, true) {
                 return Err(e);
             }
+            if let Some(e) = description_budget_error(content, None) {
+                return Err(e);
+            }
             if let Err(e) = validate_content_size(content, "SKILL.md") {
                 return Err(e);
             }
@@ -775,6 +840,7 @@ fn apply_op(root: &Path, op: &Value) -> Result<Value, String> {
                     }
                 }
             }
+            check_root_skill_description(&dir, &target, &updated)?;
             std::fs::write(&target, &updated).map_err(|e| format!("failed to write {}: {e}", target.display()))?;
             let label = if file_path.is_empty() { "SKILL.md".to_string() } else { file_path.to_string() };
             Ok(json!({
@@ -796,6 +862,7 @@ fn apply_op(root: &Path, op: &Value) -> Result<Value, String> {
             }
             let dir = locate_dir(root, name)?;
             let target = dir.join(file_path);
+            check_root_skill_description(&dir, &target, file_content)?;
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| format!("failed to create {display}: {e}", display = parent.display()))?;
             }
@@ -875,6 +942,7 @@ fn rewrite(root: &Path, name: &str, content: &str) -> Result<Value, String> {
         return Err(e);
     }
     let dir = locate_dir(root, name)?;
+    check_root_skill_description(&dir, &dir.join("SKILL.md"), content)?;
     std::fs::write(dir.join("SKILL.md"), content)
         .map_err(|e| format!("failed to write SKILL.md: {e}"))?;
     Ok(json!({
@@ -928,6 +996,46 @@ mod manage_tests {
 
     fn v(s: &str) -> Value {
         serde_json::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn root_skill_md_writes_enforce_the_60_char_description_budget() {
+        let root = tmp_root();
+        let dir = seed(&root);
+        // A create with an over-60 description is refused.
+        let long_desc = "Use when deploying multi-region clusters with custom CNI plugins.";
+        let long_fm = format!("---\nname: long-desc\ndescription: {long_desc}\n---\n\n# long-desc\n\nBody.");
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({ "operations": [{ "name": "long-desc", "action": "create", "content": long_fm }] }),
+        ));
+        assert!(out["error"].as_str().unwrap().contains("60"), "{out}");
+        // write_file to the root SKILL.md cannot introduce a long description either…
+        let written = format!("---\nname: deploy\ndescription: {long_desc}\n---\n\n# deploy\n\nBody.");
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({ "operations": [{ "name": "deploy", "action": "write_file", "file_path": "SKILL.md", "file_content": written }] }),
+        ));
+        assert!(out["error"].as_str().unwrap().contains("60"), "{out}");
+        // …and neither can a targeted patch that rewrites it.
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({ "operations": [{ "name": "deploy", "action": "patch", "old_string": "Ship things safely.", "new_string": long_desc }] }),
+        ));
+        assert!(out["error"].as_str().unwrap().contains("60"), "{out}");
+        // A legacy long description stays editable when the write leaves it unchanged.
+        let legacy = format!("---\nname: legacy\ndescription: {}\n---\n\n# legacy\n\nBody.", "x".repeat(80));
+        fs::create_dir_all(root.join("legacy")).unwrap();
+        fs::write(root.join("legacy").join("SKILL.md"), &legacy).unwrap();
+        let out = v(&execute_manage_in(
+            &root,
+            &json!({ "operations": [{ "name": "legacy", "action": "patch", "old_string": "Body.", "new_string": "Body, extended." }] }),
+        ));
+        assert!(out["applied"].as_u64() == Some(1), "{out}");
+        let updated = fs::read_to_string(root.join("legacy").join("SKILL.md")).unwrap();
+        assert!(updated.contains("Body, extended."));
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
