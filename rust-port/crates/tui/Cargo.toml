@@ -1,0 +1,23 @@
+[package]
+name = "hermes-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Full-screen terminal TUI for hermes-rs (port of the Python prompt_toolkit TUI)"
+
+[[bin]]
+name = "hermes-tui"
+path = "src/main.rs"
+
+[dependencies]
+hermes-core = { path = "../core" }
+hermes-cli = { path = "../cli" }
+hermes-session = { path = "../session" }
+ratatui = "0.29"
+crossterm = "0.29"
+tokio = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

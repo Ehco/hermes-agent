@@ -8,15 +8,10 @@ use anyhow::{anyhow, Result};
 use hermes_core::config::ProviderConfig;
 use hermes_core::model::{Message, Role};
 use hermes_session::SessionStore;
-use repl::Repl;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-mod multiline;
-mod repl;
-mod session_switch;
-mod slash;
-mod tool_bridge;
+use hermes_cli::repl::{self, Repl};
 
 // ─── CLI flags ───────────────────────────────────────────────────────────────
 

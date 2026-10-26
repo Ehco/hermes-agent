@@ -42,6 +42,18 @@ pub trait ReplIo: Send {
     fn write_out(&mut self, text: &str);
     fn write_err(&mut self, text: &str);
     fn flush_out(&mut self);
+    /// A streaming assistant text delta (port of the Python TUI's live
+    /// render hook). Default: a raw write, which is the classic REPL's
+    /// behavior. The TUI overrides this to append into the live assistant
+    /// card in the transcript.
+    fn stream_delta(&mut self, delta: &str) {
+        self.write_out(delta);
+    }
+    /// Tool execution progress (Python tool-card rendering): `output = None`
+    /// when a call starts, `Some(result)` when it finishes. Default: silent,
+    /// which is the classic REPL's behavior; the TUI overrides this to draw
+    /// a tool card in place.
+    fn tool_event(&mut self, _name: &str, _arguments: &str, _output: Option<&str>) {}
 }
 
 /// Real terminal IO: reads stdin lines on tokio's blocking pool so a turn can
@@ -77,6 +89,8 @@ impl ReplIo for StdinIo {
     fn flush_out(&mut self) {
         std::io::stdout().flush().ok();
     }
+    // stream_delta inherits the default (raw write) — exactly StdinIo's
+    // previous behavior.
 }
 
 /// Tool execution host: delegates into the tool bridge by name (no hardcoded
@@ -193,6 +207,20 @@ impl Repl {
         if let Ok(mut io) = self.io.lock() {
             io.write_out(text);
             io.flush_out();
+        }
+    }
+
+    fn stream(&self, delta: &str) {
+        // Streaming deltas go through the hook so the TUI can render them
+        // into the live assistant card (default = raw write, as before).
+        if let Ok(mut io) = self.io.lock() {
+            io.stream_delta(delta);
+        }
+    }
+
+    fn tool_progress(&self, name: &str, arguments: &str, output: Option<&str>) {
+        if let Ok(mut io) = self.io.lock() {
+            io.tool_event(name, arguments, output);
         }
     }
 
@@ -469,7 +497,7 @@ impl Repl {
                 tokio::select! {
                     item = stream.next() => match item {
                         Some(Ok(StreamItem::TextDelta(d))) => {
-                            self.out_raw(&d);
+                            self.stream(&d);
                             text.push_str(&d);
                         }
                         Some(Ok(StreamItem::ToolCall { id, name, arguments })) => {
@@ -538,10 +566,14 @@ impl Repl {
             }
 
             for (id, name, arguments) in calls {
+                // Tool cards render in place: call start, then its result
+                // (Python renders the same pair in the TUI).
+                self.tool_progress(&name, &arguments, None);
                 let output = host
                     .execute(&name, &arguments)
                     .await
                     .unwrap_or_else(|e| format!("tool error: {e}"));
+                self.tool_progress(&name, &arguments, Some(&output));
                 let msg = Message {
                     role: Role::Tool,
                     content: vec![Content::ToolResult { call_id: id, output }],
