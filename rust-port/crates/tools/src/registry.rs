@@ -13,11 +13,11 @@ use hermes_core::model::ToolSpec;
 use crate::{
     annotate_preview, browser, clarify, close_terminal, computer_use, cronjob, delegate_task,
     desktop_preview, desktop_project, discord, drive_preview, edit, execute_code, feishu,
-    focus_pane, gui_tour, image_generate, list_dir, manage_catalog, manage_connections, maps,
-    memory, process_manage, react_to_message, read_file, read_terminal, read_window_below, search,
-    send_message, session_search, set_theme, setup_beat, show_tip, skills, terminal, todo_list,
-    tool_search, tts, util, video_generate, vision, web_extract, web_search, write_file, x_search,
-    xai_video, yuanbao,
+    focus_pane, gui_tour, image_generate, kanban, list_dir, manage_catalog, manage_connections,
+    maps, memory, process_manage, react_to_message, read_file, read_terminal, read_window_below,
+    search, send_message, session_search, set_theme, setup_beat, show_tip, skills, terminal,
+    todo_list, tool_search, tts, util, video_generate, vision, web_extract, web_search, write_file,
+    x_search, xai_video, yuanbao,
 };
 
 pub struct ToolRegistry {
@@ -173,6 +173,9 @@ pub fn execute_sync(name: &str, args: &Value) -> String {
         "yb_search_sticker" => yuanbao::execute_search_sticker(args),
         "yb_send_dm" => yuanbao::execute_send("yb_send_dm", args),
         "yb_send_sticker" => yuanbao::execute_send("yb_send_sticker", args),
+        // Kanban subsystem: the 15 kanban_* tools dispatch through the shared
+        // kanban handler (mode gating + worker-ownership + board state).
+        name if name.starts_with("kanban_") => kanban::execute(name, args),
         other => util::tool_error(format!("Unknown tool: {other}")),
     }
 }
@@ -181,7 +184,7 @@ pub fn execute_sync(name: &str, args: &Value) -> String {
 /// kept in sync with the Python agent's tool schemas (same parameter names,
 /// defaults, and bounds).
 pub fn specs() -> Vec<ToolSpec> {
-    vec![
+    let mut specs: Vec<ToolSpec> = vec![
         ToolSpec {
             name: "read_file".into(),
             description: "Read a text file with line numbers and pagination. Use this instead of cat/head/tail in terminal. Output format: 'LINE_NUM|CONTENT'. Use offset and limit for large files. Reads exceeding ~100K characters are truncated on a line boundary and return a next_offset; continue with offset to read the rest.".into(),
@@ -1260,7 +1263,20 @@ pub fn specs() -> Vec<ToolSpec> {
                 "required": []
             }),
         },
-    ]
+    ];
+    // --- Kanban subsystem (tools/kanban_tools.py): 15 tools behind the kanban
+    // mode gate (dispatcher workers + the `kanban` toolset). Schemas are
+    // byte-frozen ports of tools/kanban_tools_schemas.py; handlers live in
+    // kanban::execute with the board state in kanban_state.
+    for name in kanban::KANBAN_TOOL_NAMES {
+        let (description, schema) = kanban::spec_parts(name).expect("kanban schema is wellformed");
+        specs.push(ToolSpec {
+            name: name.into(),
+            description,
+            schema,
+        });
+    }
+    specs
 }
 
 #[cfg(test)]
@@ -1271,7 +1287,11 @@ mod tests {
     #[tokio::test]
     async fn dispatches_by_name() {
         let reg = ToolRegistry::new();
-        assert_eq!(reg.specs().len(), 74);
+        // 74 pre-kanban tools + the 15-tool kanban subsystem = 89.
+        assert_eq!(reg.specs().len(), 74 + 15);
+        for name in kanban::KANBAN_TOOL_NAMES {
+            assert!(reg.spec(name).is_some(), "{name} missing from specs");
+        }
 
         let out = reg
             .dispatch("read_file", &json!({"path": "nonexistent-xyz"}))

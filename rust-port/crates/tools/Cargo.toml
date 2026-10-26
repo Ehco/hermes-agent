@@ -19,3 +19,9 @@ reqwest = { workspace = true, features = ["blocking"] }
 # JobStore (no reimplementation of either).
 hermes-skills = { path = "../skills" }
 hermes-schedulers = { path = "../schedulers" }
+# Kanban tools: inline base64 attachment decoding.
+base64 = "0.22"
+
+[dev-dependencies]
+# Board-state round-trip tests run in an isolated HERMES_HOME tempdir.
+tempfile = "3"

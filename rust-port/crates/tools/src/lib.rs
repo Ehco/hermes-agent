@@ -23,6 +23,10 @@ pub mod execute_code;
 pub mod feishu;
 pub mod focus_pane;
 pub mod gui_tour;
+// Kanban subsystem (tools/kanban_tools.py + hermes_cli/kanban_db.py port):
+// 15 kanban_* tools with the mode gating and the JSON board-state layer.
+pub mod kanban;
+pub mod kanban_state;
 pub mod html_text;
 pub mod image_generate;
 pub mod list_dir;
