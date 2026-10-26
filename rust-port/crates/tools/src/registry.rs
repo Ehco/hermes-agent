@@ -15,9 +15,9 @@ use crate::{
     desktop_preview, desktop_project, discord, drive_preview, edit, execute_code, feishu,
     focus_pane, gui_tour, image_generate, kanban, list_dir, manage_catalog, manage_connections,
     maps, memory, process_manage, react_to_message, read_file, read_terminal, read_window_below,
-    search, send_message, session_search, set_theme, setup_beat, show_tip, skills, terminal,
-    todo_list, tool_search, tts, util, video_generate, vision, web_extract, web_search, write_file,
-    x_search, xai_video, yuanbao,
+    retaindb, search, send_message, session_search, set_theme, setup_beat, show_tip, skills,
+    terminal, todo_list, tool_search, tts, util, video_generate, vision, web_extract, web_search,
+    write_file, x_search, xai_video, yuanbao,
 };
 
 pub struct ToolRegistry {
@@ -176,6 +176,10 @@ pub fn execute_sync(name: &str, args: &Value) -> String {
         // Kanban subsystem: the 15 kanban_* tools dispatch through the shared
         // kanban handler (mode gating + worker-ownership + board state).
         name if name.starts_with("kanban_") => kanban::execute(name, args),
+        // RetainDB memory-provider tools (plugins/memory/retaindb): schema
+        // validation, then the injected transport/context seams — without one
+        // they surface the faithful "RetainDB not initialized" error.
+        name if name.starts_with("retaindb_") => retaindb::tools::execute(name, args),
         other => util::tool_error(format!("Unknown tool: {other}")),
     }
 }
@@ -1276,6 +1280,19 @@ pub fn specs() -> Vec<ToolSpec> {
             schema,
         });
     }
+    // --- RetainDB memory-provider tools (plugins/memory/retaindb
+    // get_tool_schemas): the ten retaindb_* tools. Schemas are byte-frozen
+    // ports of the Python _SCHEMAS; the static registry advertises all ten
+    // (kanban precedent) with the Python exposure gate — memory toolset +
+    // provider availability — exported as retaindb::tools::
+    // retaindb_tools_visible for host-side filtering.
+    for name in retaindb::tools::TOOL_NAMES {
+        specs.push(ToolSpec {
+            name: name.into(),
+            description: retaindb::tools::spec_description(name).into(),
+            schema: retaindb::tools::spec_schema(name),
+        });
+    }
     specs
 }
 
@@ -1287,9 +1304,13 @@ mod tests {
     #[tokio::test]
     async fn dispatches_by_name() {
         let reg = ToolRegistry::new();
-        // 74 pre-kanban tools + the 15-tool kanban subsystem = 89.
-        assert_eq!(reg.specs().len(), 74 + 15);
+        // 74 pre-kanban tools + the 15-tool kanban subsystem + the 10-tool
+        // RetainDB memory-provider surface = 99.
+        assert_eq!(reg.specs().len(), 74 + 15 + 10);
         for name in kanban::KANBAN_TOOL_NAMES {
+            assert!(reg.spec(name).is_some(), "{name} missing from specs");
+        }
+        for name in retaindb::tools::TOOL_NAMES {
             assert!(reg.spec(name).is_some(), "{name} missing from specs");
         }
 

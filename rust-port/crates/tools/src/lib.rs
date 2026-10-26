@@ -49,8 +49,11 @@ pub mod setup_beat;
 pub mod show_tip;
 pub mod skills;
 // Voice: cloud-STT provider HTTP contracts (transcription_cloud.py slice) and
-// the RetainDB dialectic-modeling core — both over injected HTTP seams, so no
-// registry entries (registry stays closed at 89) and no live network in tests.
+// the RetainDB dialectic-modeling core + its ten retaindb_* agent tools — all
+// over injected HTTP seams, so no live network in tests. The ten tools ARE
+// registry entries (99 total); visibility pins to the Python exposure gate
+// (memory toolset + provider availability) via retaindb::tools::
+// retaindb_tools_visible.
 pub mod retaindb;
 pub mod transcription;
 pub mod terminal;

@@ -1796,12 +1796,13 @@ pub fn spec_parts(name: &str) -> Option<(String, Value)> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// Env-mutating tests run under one lock (registry tests share the process).
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Env-mutating tests run under one lock (registry tests share the process;
+    /// retaindb's env tests take this too, since they touch HERMES_HOME).
+    pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Fresh `HERMES_HOME` in a tempdir + cleared kanban worker envs, restored
     /// on drop. Holds the env lock for the test's lifetime.
