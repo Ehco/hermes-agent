@@ -11,10 +11,12 @@ use serde_json::Value;
 use hermes_core::model::ToolSpec;
 
 use crate::{
-    annotate_preview, clarify, cronjob, delegate_task, desktop_preview, drive_preview, edit,
-    focus_pane, image_generate, list_dir, maps, memory, process_manage, read_file, read_terminal,
-    read_window_below, search, session_search, set_theme, show_tip, skills, terminal, todo_list,
-    tool_search, tts, util, web_extract, web_search, write_file, x_search,
+    annotate_preview, clarify, cronjob, delegate_task, desktop_preview, desktop_project,
+    drive_preview, edit, execute_code, focus_pane, gui_tour, image_generate, list_dir,
+    manage_catalog, manage_connections, maps, memory, process_manage, react_to_message, read_file,
+    read_terminal, read_window_below, search, send_message, session_search, set_theme, show_tip,
+    skills, terminal, todo_list, tool_search, tts, util, video_generate, web_extract, web_search,
+    write_file, x_search,
 };
 
 pub struct ToolRegistry {
@@ -112,6 +114,26 @@ pub fn execute_sync(name: &str, args: &Value) -> String {
         "tool_search" => tool_search::execute_search(args),
         "tool_describe" => tool_search::execute_describe(args),
         "tool_call" => tool_search::execute_call(args),
+        // --- Batch 6 ---
+        // Programmatic Tool Calling: Python cells in a persistent session
+        // kernel with RPC access to a sandbox tool subset.
+        "execute_code" => execute_code::execute(args),
+        // Desktop Projects (named workspaces): create / switch / list.
+        "desktop_project" => desktop_project::execute(args),
+        // Video generation dispatches to an injected plugin provider.
+        "video_generate" => video_generate::execute(args),
+        // Cross-channel messaging (send / list / react / unreact) over the
+        // injected sender/target registry.
+        "send_message" => send_message::execute(args),
+        // The agent's emoji tapback in the desktop app.
+        "react_to_message" => react_to_message::execute(args),
+        // Hosted connector accounts + local MCP servers; without the gateway
+        // backends it degrades to the faithful unavailable error.
+        "manage_connections" => manage_connections::execute(args),
+        // Catalog search + install-through-the-card.
+        "manage_catalog" => manage_catalog::execute(args),
+        // Guided tour (highlight + narrate) round-trips the desktop bridge.
+        "gui_tour" => gui_tour::execute(args),
         other => util::tool_error(format!("Unknown tool: {other}")),
     }
 }
@@ -638,6 +660,121 @@ pub fn specs() -> Vec<ToolSpec> {
                 "required": []
             }),
         },
+        // --- Batch 6 ---
+        ToolSpec {
+            name: "execute_code".into(),
+            description: "Run Python that calls Hermes tools programmatically. Use when you need 3+ tool calls with logic between them: filtering/reducing large outputs before they enter context, branching, or loops (N pages/files, retry on failure). Use normal tool calls for single calls, results you must reason over in full, or anything needing user interaction.\n\nCalls run in a persistent session kernel: variables, imports, and loaded data survive across execute_code calls, so build on earlier work instead of re-loading it. A timed-out or interrupted call loses that state.\n\nAvailable via `from hermes_tools import ...`: web_search, web_extract, read_file, write_file, search_files, patch, terminal, ...\n\nLimits: 5-minute timeout, max 50 tool calls per call. Stdout over 50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\nHelpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. json_parse(text) — tolerant json.loads for terminal() output; shell_quote(s) — shlex.quote for dynamic shell args; retry(fn, max_attempts=3, delay=2) — exponential backoff.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Python code to execute. Import tools with `from hermes_tools import web_search, terminal, ...` and print your final result to stdout."},
+                    "reset": {"type": "boolean", "description": "Discard the kernel's persistent state and start fresh before running this code."}
+                },
+                "required": ["code"]
+            }),
+        },
+        ToolSpec {
+            name: "desktop_project".into(),
+            description: "Create or switch desktop Projects (named workspaces). create: one and switch this chat into it — pass path to anchor it to a repo/folder (the chat's workspace moves there, the sidebar follows). switch: move this chat into an existing project by name/slug/id — the intentional way to move the session, not `cd`. list: all projects + which one this chat is in.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["create", "switch", "list"]},
+                    "name": {"type": "string", "description": "create: human name. switch: name, slug, or id."},
+                    "path": {"type": "string", "description": "create: repo/folder to anchor to."}
+                },
+                "required": ["action"]
+            }),
+        },
+        ToolSpec {
+            name: "video_generate".into(),
+            description: "Generate a video from a text prompt (text-to-video), animate a still image (image-to-video), or guide generation with reference images. The backend and model family are user-configured; the agent does not pick them. Long-running generations may take 30 seconds to several minutes — the call blocks until the video is ready. Returns the result in the `video` field — either an HTTP URL or an absolute file path.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Text instruction describing the desired video, motion, subject, style, camera movement, etc."},
+                    "duration": {"type": "integer", "description": "Desired video duration in seconds. Providers clamp to their supported range. Omit for the provider default."},
+                    "aspect_ratio": {"type": "string", "enum": ["16:9", "1:1", "9:16", "4:3", "3:2"], "description": "Output aspect ratio.", "default": "16:9"},
+                    "resolution": {"type": "string", "enum": ["720p", "1080p"], "description": "Output resolution.", "default": "1080p"}
+                },
+                "required": ["prompt"]
+            }),
+        },
+        ToolSpec {
+            name: "send_message".into(),
+            description: "Cross-channel messaging via platform APIs: action='send' delivers text (optionally with [[path]] media attachments) to `platform:target`; 'list' shows the channel directory; 'react'/'unreact' add or retract an emoji on a message. Without a ref the platform's home channel is used.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["send", "list", "react", "unreact"], "description": "Defaults to send."},
+                    "target": {"type": "string", "description": "The destination as `platform:target` (e.g. 'telegram:chat_id'); omit the target for the home channel."},
+                    "message": {"type": "string", "description": "send: the text. Media files ride inline as [[path]]."},
+                    "emoji": {"type": "string", "description": "react: the emoji to add."},
+                    "message_id": {"type": "string", "description": "react: the specific message (defaults to the latest)." }
+                }
+            }),
+        },
+        ToolSpec {
+            name: "react_to_message".into(),
+            description: "React to a message with a single emoji, the way you'd tapback in iMessage. Use it like a person would: occasionally, when felt — not on every message. NEVER narrate or explain a reaction. Defaults to the user's most recent message. One reaction per message: a different emoji replaces yours, an empty string retracts it.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "emoji": {"type": "string", "description": "The emoji to react with (e.g. '❤️', '😂', '👍'). Pass an empty string to remove your reaction."},
+                    "message_row_id": {"type": "integer", "description": "Optional. The specific message to react to. Omit to react to the user's latest message."},
+                    "messages_back": {"type": "integer", "description": "Optional. React to an EARLIER user message: 1 = the one before the latest, 2 = two before."}
+                },
+                "required": ["emoji"]
+            }),
+        },
+        ToolSpec {
+            name: "manage_connections".into(),
+            description: "Connect the user to apps. Two kinds: a hosted connector account (Gmail, Notion, ...) served through the tool gateway, and a local MCP server from the bundled catalog. Targets go in 'connectors': a bare slug or {\"name\": \"gmail\"} is a hosted connector account; {\"name\": \"linear\", \"mcp\": true} is a local MCP server. Hosted actions: status, display, connect, reconnect, rename. MCP actions (every target carries \"mcp\": true): install, enable, authorize. This tool can NOT disconnect, delete, or revoke an account — that is deliberately user-only; direct the user to the Nous Portal (their org's Connectors page) or the desktop app.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["display", "status", "connect", "reconnect", "rename", "install", "enable", "authorize"], "description": "Defaults to status. connect, reconnect and rename take hosted connector slugs only. install, enable and authorize take mcp:true targets only."},
+                    "connectors": {"type": "array", "items": {"anyOf": [{"type": "string"}, {"type": "object", "properties": {"name": {"type": "string"}, "mcp": {"type": "boolean"}, "alias": {"type": "string"}, "to": {"type": "string"}}, "required": ["name"]}], "description": "Targets. REQUIRED for every action but status and display; a bare slug is a hosted connector, so an MCP server needs the object form with \"mcp\": true."}},
+                    "force": {"type": "boolean", "description": "reconnect only: restart the authorization even if the app is connected (account switch)."}
+                },
+                "required": []
+            }),
+        },
+        ToolSpec {
+            name: "manage_catalog".into(),
+            description: "Find and install Hermes catalog plugins and hub skills for the user. 'search' lists matches (id, kind, display, tier, platforms, installed) and changes nothing. 'install' shows the user one approval card with a row per item and blocks until every row is installed, skipped or failed; the host installs each approved row into this chat's profile at the catalog's reviewed version. Pass only catalog ids exactly as 'search' returns them. Offer an install only for something the user asked for or agreed to.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["search", "install"]},
+                    "kind": {"type": "string", "enum": ["plugin", "skill"], "description": "search only: limit results to plugins or skills."},
+                    "query": {"type": "string", "description": "search only: words to match; empty lists plugins."},
+                    "items": {"type": "array", "description": "install only: the catalog items to offer, one card row each.", "items": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["plugin", "skill"]}, "id": {"type": "string"}}, "required": ["kind", "id"], "additionalProperties": false}},
+                    "reason": {"type": "string", "description": "install only: one line on why these are offered."}
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: "gui_tour".into(),
+            description: "Guided tour in the desktop GUI: dim the screen, highlight an element, attach a titled popover. Surfaces: 'app' (Hermes itself) or 'preview' (the page in the preview pane). A general look around the app is ONE call: action='start' with no steps runs the app's built-in tour (preset 'quick' or 'full', default full). For a custom tour, call action='targets' first — prefer targets marked stable:true; re-scan if one stops matching. Then narrate with action='show' (one highlight per call, replaces the last — pair each with a chat message) or hand over with action='start' + steps (user gets Next/Prev; 'next'/'prev' also page it). 'stop' clears.".into(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["targets", "show", "start", "next", "prev", "stop"], "description": "start alone runs the built-in tour; targets first for custom steps."},
+                    "surface": {"type": "string", "enum": ["app", "preview"], "description": "'app' (default) or 'preview'."},
+                    "selector": {"type": "string", "description": "show: selector from targets (prefer stable). Omit = centered narration."},
+                    "title": {"type": "string", "description": "show: popover title."},
+                    "text": {"type": "string", "description": "show: popover body."},
+                    "side": {"type": "string", "enum": ["top", "right", "bottom", "left"], "description": "show: popover side; omit to auto-place."},
+                    "steps": {"type": "array", "description": "start: ordered steps; omit for the built-in tour.", "items": {"type": "object", "properties": {"selector": {"type": "string"}, "title": {"type": "string"}, "text": {"type": "string"}, "side": {"type": "string", "enum": ["top", "right", "bottom", "left"]}}}},
+                    "preset": {"type": "string", "enum": ["quick", "full"], "description": "start without steps: 'quick' (four essentials) or 'full'."},
+                    "step_index": {"type": "integer", "description": "start: 0-indexed first step."}
+                },
+                "required": ["action"]
+            }),
+        },
     ]
 }
 
@@ -649,7 +786,7 @@ mod tests {
     #[tokio::test]
     async fn dispatches_by_name() {
         let reg = ToolRegistry::new();
-        assert_eq!(reg.specs().len(), 33);
+        assert_eq!(reg.specs().len(), 41);
 
         let out = reg
             .dispatch("read_file", &json!({"path": "nonexistent-xyz"}))
@@ -789,5 +926,81 @@ mod tests {
             let out = reg.dispatch(name, &args).await;
             assert!(out.contains(expected), "{name}: {out}");
         }
+    }
+
+    #[tokio::test]
+    async fn batch6_tools_dispatch() {
+        let reg = ToolRegistry::new();
+        // execute_code: arg validation before any kernel work.
+        let out = reg
+            .dispatch("execute_code", &json!({"command": "ls"}))
+            .await;
+        assert!(out.contains("received a 'command' parameter"), "{out}");
+        let out = reg.dispatch("execute_code", &json!({})).await;
+        assert!(out.contains("No code provided"), "{out}");
+        // desktop_project: action validation.
+        let out = reg.dispatch("desktop_project", &json!({})).await;
+        assert!(out.contains("action must be one of"), "{out}");
+        let out = reg
+            .dispatch("desktop_project", &json!({"action": "create"}))
+            .await;
+        assert!(out.contains("name is required"), "{out}");
+        let out = reg
+            .dispatch("desktop_project", &json!({"action": "list"}))
+            .await;
+        assert!(out.contains("\"projects\""), "{out}");
+        // video_generate: validation precedes provider resolution (the
+        // provider-seam errors are covered in the module's own locked tests).
+        let out = reg.dispatch("video_generate", &json!({})).await;
+        assert!(out.contains("prompt is required"), "{out}");
+        // send_message / react_to_message degrade without their seams.
+        let out = reg
+            .dispatch("send_message", &json!({"message": "hi"}))
+            .await;
+        assert!(out.contains("Both 'target' and 'message'"), "{out}");
+        let out = reg
+            .dispatch(
+                "send_message",
+                &json!({"target": "telegram:c", "message": "hi"}),
+            )
+            .await;
+        assert!(
+            out.contains("not available in this execution context"),
+            "{out}"
+        );
+        let out = reg
+            .dispatch("react_to_message", &json!({"emoji": "👍"}))
+            .await;
+        assert!(out.contains("No active session"), "{out}");
+        // manage_connections / manage_catalog: validation then unavailability.
+        let out = reg
+            .dispatch("manage_connections", &json!({"action": "hug"}))
+            .await;
+        assert!(out.contains("action must be one of"), "{out}");
+        let out = reg
+            .dispatch("manage_connections", &json!({"action": "install"}))
+            .await;
+        assert!(out.contains("requires 'connectors'"), "{out}");
+        // (status/connect availability is covered in the module's own locked
+        // tests — the registry test must not race the module backends global.)
+        let out = reg.dispatch("manage_catalog", &json!({})).await;
+        assert!(out.contains("action must be one of"), "{out}");
+        let out = reg
+            .dispatch("manage_catalog", &json!({"action": "search"}))
+            .await;
+        assert!(
+            out.contains("available only in the Hermes desktop app"),
+            "{out}"
+        );
+        // gui_tour: validation then the desktop-only error.
+        let out = reg.dispatch("gui_tour", &json!({})).await;
+        assert!(out.contains("action must be one of"), "{out}");
+        let out = reg
+            .dispatch("gui_tour", &json!({"action": "targets"}))
+            .await;
+        assert!(
+            out.contains("tour is only available in the Hermes desktop app"),
+            "{out}"
+        );
     }
 }
