@@ -23,6 +23,7 @@
 pub mod dispatch;
 pub mod jsonrpc;
 pub mod rest;
+pub mod state_store;
 pub mod tickets;
 pub mod turn;
 pub mod ws;
@@ -504,6 +505,12 @@ pub struct DesktopInner {
     /// The profile's provider configuration — `setup.status` /
     /// `setup.runtime_check` read it (Python `session_readiness`).
     pub provider: Option<hermes_core::config::ProviderConfig>,
+    /// The profile's config.yaml path — `/api/config` serves the raw
+    /// document from here.
+    pub config_path: Option<PathBuf>,
+    /// The Python backend's `state.db` — the normal desktop's session store,
+    /// merged into the session lists (read-only).
+    pub state_db: Option<PathBuf>,
     /// Skill enable-state (the /api/skills toggle); absent = enabled.
     pub skills_disabled: Mutex<std::collections::HashSet<String>>,
     /// MCP server configs (name → enabled + launch spec) for /api/mcp.
@@ -554,6 +561,8 @@ impl Clone for DesktopInner {
             store_dir: self.store_dir.clone(),
             skills_root: Mutex::new(self.skills_root.lock().unwrap().clone()),
             provider: self.provider.clone(),
+            config_path: self.config_path.clone(),
+            state_db: self.state_db.clone(),
             skills_disabled: Mutex::new(self.skills_disabled.lock().unwrap().clone()),
             mcp_servers: Mutex::new(self.mcp_servers.lock().unwrap().clone()),
             started_at: self.started_at,
@@ -600,6 +609,8 @@ where
                 store_dir: None,
                 skills_root: Mutex::new(None),
                 provider: None,
+                config_path: None,
+                state_db: None,
                 skills_disabled: Mutex::new(std::collections::HashSet::new()),
                 mcp_servers: Mutex::new(Vec::new()),
                 started_at: Instant::now(),
@@ -657,6 +668,27 @@ where
     pub fn with_provider(self, provider: hermes_core::config::ProviderConfig) -> Self {
         let mut inner = (*self.inner).clone();
         inner.provider = Some(provider);
+        Self {
+            inner: Arc::new(inner),
+            ..self
+        }
+    }
+
+    /// Configure the profile's config.yaml path for `/api/config`.
+    pub fn with_config_path(self, path: impl Into<PathBuf>) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.config_path = Some(path.into());
+        Self {
+            inner: Arc::new(inner),
+            ..self
+        }
+    }
+
+    /// Configure the Python backend's `state.db` (read-only merge into the
+    /// session lists).
+    pub fn with_state_db(self, path: impl Into<PathBuf>) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.state_db = Some(path.into());
         Self {
             inner: Arc::new(inner),
             ..self

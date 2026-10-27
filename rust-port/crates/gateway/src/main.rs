@@ -245,11 +245,15 @@ fn serve_owner(args: &Args) -> Result<()> {
     .with_store_dir(home.join("sessions"))
     // The setup readiness RPCs read the same provider config the
     // transport was built from (Python `session_readiness`).
-    .with_provider(cfg)
+    .with_provider(cfg.clone())
     // Skills/MCP read the profile's real dirs/config: the desktop's
     // Capabilities view lists the same servers the Python app does.
     .with_skills_root(home.join("skills"))
-    .with_mcp_servers(mcp_servers_from_config(&home));
+    .with_mcp_servers(mcp_servers_from_config(&home))
+    .with_config_path(home.join("config.yaml"))
+    // The normal desktop's session store — merged read-only so both apps
+    // see the same chats.
+    .with_state_db(home.join("state.db"));
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

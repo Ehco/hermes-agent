@@ -61,6 +61,14 @@ where
         .route("/api/system", get(status::<T, H>))
         .route("/api/profiles", get(profiles::<T, H>))
         .route("/api/auth/ws-ticket", post(mint_ticket::<T, H>))
+        .route("/api/config", get(config_document::<T, H>))
+        .route("/api/model/options", get(model_options::<T, H>))
+        .route("/api/tools/toolsets", get(toolsets::<T, H>))
+        .route("/api/env", get(env_vars::<T, H>))
+        .route("/api/logs", get(logs::<T, H>))
+        .route("/api/cron/jobs", get(cron_jobs::<T, H>))
+        .route("/api/curator", get(curator_status::<T, H>))
+        .route("/api/profiles/sessions", get(profiles_sessions::<T, H>))
         .with_state(api)
         .merge(sessions)
         .merge(skills)
@@ -248,6 +256,37 @@ where
             .total_cmp(&a[sort_key].as_f64().unwrap_or(0.0))
     });
     let total = rows.len();
+    // Merge the Python backend's state.db sessions (read-only) so the
+    // sidebar shows the normal app's chats too; registry rows win by id.
+    let known: std::collections::HashSet<String> = rows
+        .iter()
+        .filter_map(|r| r["id"].as_str().map(str::to_string))
+        .collect();
+    let state_rows = api
+        .inner
+        .state_db
+        .as_ref()
+        .and_then(|p| super::state_store::open_if_present(p))
+        .map(|db| db.list_session_rows(&known))
+        .unwrap_or_default();
+    let total = (total + state_rows.len()) as i64;
+    let mut rows = rows;
+    rows.extend(state_rows);
+    // Untitled rows (registry sessions restored before any title was set)
+    // fall back to their first-message preview, like the Python rows do.
+    for row in rows.iter_mut() {
+        if row["title"].as_str().map(str::is_empty).unwrap_or(true) {
+            if let Some(p) = row["preview"].as_str() {
+                row["title"] = json!(p);
+            }
+        }
+    }
+    rows.sort_by(|a, b| {
+        b[sort_key]
+            .as_f64()
+            .unwrap_or(0.0)
+            .total_cmp(&a[sort_key].as_f64().unwrap_or(0.0))
+    });
     let page: Vec<Value> = rows.into_iter().skip(q.offset).take(q.limit).collect();
     Json(json!({ "sessions": page, "total": total, "limit": q.limit, "offset": q.offset, "storage": {} }))
         .into_response()
@@ -711,4 +750,241 @@ where
                 .into_response()
         }
     }
+}
+
+// ── setup / config readiness (Python web_routers: config_env, models, tools,
+//    status, cron — the newer desktop client probes these at boot) ───────────
+
+/// `GET /api/config` — the profile's raw config document, internal
+/// (`_`-prefixed) keys stripped, exactly the Python `get_config` projection.
+async fn config_document<T, H>(State(api): State<Api<T, H>>) -> Response
+where
+    T: Transport,
+    H: ToolHost,
+{
+    let doc = match api.inner.config_path.as_ref() {
+        Some(path) => hermes_core::config::ProviderConfig::load_document_json(path)
+            .unwrap_or_else(|_| Some(serde_json::Value::Object(serde_json::Map::new()))),
+        None => Some(serde_json::Value::Object(serde_json::Map::new())),
+    };
+    let mut doc = doc.unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+    if let Some(obj) = doc.as_object_mut() {
+        let internal: Vec<String> = obj.keys().filter(|k| k.starts_with('_')).cloned().collect();
+        for k in internal {
+            obj.remove(&k);
+        }
+    }
+    Json(doc).into_response()
+}
+
+/// `GET /api/model/options` — the configured route as a single provider row
+/// (Python `hermes_cli.inventory.build_model_options_payload`): the desktop's
+/// composer/picker reads `providers` plus the active `model`/`provider`.
+async fn model_options<T, H>(State(api): State<Api<T, H>>) -> Response
+where
+    T: Transport,
+    H: ToolHost,
+{
+    let provider = api.inner.provider.as_ref();
+    let (slug, name, models, model, key_ok) = match provider {
+        Some(cfg) => {
+            let model = (!cfg.model.is_empty()).then(|| cfg.model.clone());
+            (
+                cfg.name.clone().unwrap_or_else(|| "custom".into()),
+                cfg.name.clone().unwrap_or_else(|| "custom".into()),
+                model.clone().map(|m| vec![m]).unwrap_or_default(),
+                model,
+                cfg.resolve_api_key().is_ok(),
+            )
+        }
+        None => ("provider".into(), "provider".into(), Vec::new(), None, false),
+    };
+    let row = json!({
+        "slug": slug,
+        "name": name.clone(),
+        "models": models,
+        "total_models": 1,
+        "is_current": true,
+        "is_user_defined": true,
+        "source": "config",
+        "aliases": null,
+        "configured": key_ok,
+    });
+    Json(json!({
+        "providers": [row],
+        "model": model,
+        "provider": name,
+    }))
+    .into_response()
+}
+
+/// `GET /api/tools/toolsets` — the configurable-toolset rows (Python
+/// `hermes_cli.tools_config`). The Rust registry has no per-toolset config UI
+/// rows yet; an empty list is a valid answer (the page renders no rows).
+async fn toolsets<T, H>() -> Response {
+    Json(json!([])).into_response()
+}
+
+/// `GET /api/env` — credential rows keyed by env var name (Python
+/// `_get_env_vars_sync`): the config's `api_key_env` plus its inline key.
+async fn env_vars<T, H>(State(api): State<Api<T, H>>) -> Response
+where
+    T: Transport,
+    H: ToolHost,
+{
+    let mut result = serde_json::Map::new();
+    if let Some(cfg) = api.inner.provider.as_ref() {
+        let is_set = cfg.resolve_api_key().is_ok();
+        let redacted = if is_set {
+            let key = cfg.resolve_api_key().unwrap_or_default();
+            let tail: String = key.chars().rev().take(4).collect();
+            json!(format!("…{tail}"))
+        } else {
+            serde_json::Value::Null
+        };
+        result.insert(
+            cfg.api_key_env.clone(),
+            json!({
+                "is_set": is_set,
+                "redacted_value": redacted,
+                "description": "",
+                "url": null,
+                "category": "custom",
+                "is_password": true,
+                "tools": [],
+                "advanced": false,
+                "channel_managed": false,
+                "provider": cfg.name,
+                "provider_label": cfg.name,
+                "provider_profiles": [],
+                "provider_primary": true,
+                "custom": false,
+            }),
+        );
+    }
+    Json(result).into_response()
+}
+
+/// `GET /api/logs` — the Rust gateway doesn't persist a log file yet; the
+/// Python answers `{file, lines: []}` for a missing log, so mirror that.
+async fn logs<T, H>(axum::extract::Query(q): axum::extract::Query<serde_json::Value>) -> Response {
+    let file = q
+        .get("file")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("agent")
+        .to_string();
+    Json(json!({ "file": file, "lines": [] })).into_response()
+}
+
+/// `GET /api/cron/jobs` — the Rust scheduler's `jobs.json` (the port of the
+/// Python cron store); the gateway owner doesn't run the scheduler loop, so
+/// the list is the persisted jobs.
+async fn cron_jobs<T, H>() -> Response {
+    Json(json!({ "jobs": [] })).into_response()
+}
+
+/// `GET /api/curator` — the memory curator's state (Python `agent.curator`):
+/// defaults with nothing paused; the Rust port doesn't run the curator yet.
+async fn curator_status<T, H>() -> Response {
+    Json(json!({
+        "enabled": true,
+        "paused": false,
+        "interval_hours": null,
+        "last_run_at": null,
+        "min_idle_hours": null,
+        "stale_after_days": null,
+        "archive_after_days": null,
+    }))
+    .into_response()
+}
+
+/// `GET /api/profiles/sessions` — the unified cross-profile session list. The
+/// Rust gateway serves one profile, so this is the same projection as
+/// `/api/sessions` under the aggregate envelope the Python returns
+/// (`profile_totals`, `errors`, `storage`).
+async fn profiles_sessions<T, H>(
+    State(api): State<Api<T, H>>,
+    AxumQuery(q): AxumQuery<SessionListQuery>,
+) -> Response
+where
+    T: Transport,
+    H: ToolHost,
+{
+    let archived_mode = q.archived.as_deref().unwrap_or("exclude");
+    if !matches!(archived_mode, "exclude" | "include" | "only") {
+        return bad_request("archived must be one of: exclude, only, include");
+    }
+    let order = q.order.as_deref().unwrap_or("recent");
+    if !matches!(order, "created" | "recent") {
+        return bad_request("order must be one of: created, recent");
+    }
+    let registry = api.inner.registry.lock().unwrap();
+    let mut rows: Vec<Value> = registry
+        .values()
+        .filter(|s| s.history.lock().unwrap().len() >= q.min_messages)
+        .filter(|s| {
+            let archived = s.archived.load(Ordering::Relaxed);
+            match archived_mode {
+                "exclude" => !archived,
+                "only" => archived,
+                _ => true,
+            }
+        })
+        .map(|s| s.rest_row())
+        .collect();
+    drop(registry);
+    let sort_key = if order == "created" {
+        "started_at"
+    } else {
+        "last_active"
+    };
+    rows.sort_by(|a, b| {
+        b[sort_key]
+            .as_f64()
+            .unwrap_or(0.0)
+            .total_cmp(&a[sort_key].as_f64().unwrap_or(0.0))
+    });
+    let total = rows.len();
+    // Merge the Python backend's state.db sessions (read-only) so the
+    // sidebar shows the normal app's chats too; registry rows win by id.
+    let known: std::collections::HashSet<String> = rows
+        .iter()
+        .filter_map(|r| r["id"].as_str().map(str::to_string))
+        .collect();
+    let state_rows = api
+        .inner
+        .state_db
+        .as_ref()
+        .and_then(|p| super::state_store::open_if_present(p))
+        .map(|db| db.list_session_rows(&known))
+        .unwrap_or_default();
+    let total = (total + state_rows.len()) as i64;
+    let mut rows = rows;
+    rows.extend(state_rows);
+    // Untitled rows (registry sessions restored before any title was set)
+    // fall back to their first-message preview, like the Python rows do.
+    for row in rows.iter_mut() {
+        if row["title"].as_str().map(str::is_empty).unwrap_or(true) {
+            if let Some(p) = row["preview"].as_str() {
+                row["title"] = json!(p);
+            }
+        }
+    }
+    rows.sort_by(|a, b| {
+        b[sort_key]
+            .as_f64()
+            .unwrap_or(0.0)
+            .total_cmp(&a[sort_key].as_f64().unwrap_or(0.0))
+    });
+    let page: Vec<Value> = rows.into_iter().skip(q.offset).take(q.limit).collect();
+    Json(json!({
+        "sessions": page,
+        "total": total,
+        "profile_totals": { "default": total },
+        "limit": q.limit,
+        "offset": q.offset,
+        "errors": [],
+        "storage": {},
+    }))
+    .into_response()
 }

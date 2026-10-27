@@ -46,6 +46,15 @@ where
         // repo→lane→sessions tree is a later port. `{project: null}` is the
         // contract's own "nothing here" — the client falls back to its
         // overview node instead of showing a load failure.
+        // The newer sidebar's overview tree comes from `projects.tree`
+        // (Python project_tree.py — repo/branch/kanban lanes). An empty tree
+        // is a valid answer: the client drops project grouping and renders
+        // the plain session list instead of a load failure. The full lane
+        // tree is a later port.
+        "projects.tree" => Some(super::jsonrpc::response(
+            id,
+            json!({ "projects": [], "active_id": null, "scoped_session_ids": [] }),
+        )),
         "projects.project_sessions" => Some(super::jsonrpc::response(id, json!({ "project": null }))),
         _ => Some(super::jsonrpc::error(
             id,
@@ -59,10 +68,44 @@ where
 fn get_session<'a>(inner: &DesktopInner, id: Option<&Value>) -> Option<Arc<Session>> {
     let sid = id?.as_str()?;
     let registry = inner.registry.lock().unwrap();
-    registry
-        .get(sid)
-        .cloned()
-        .or_else(|| registry.values().find(|s| s.stored_id == sid).cloned())
+    if let Some(found) = registry.get(sid).cloned() {
+        return Some(found);
+    }
+    if let Some(found) = registry.values().find(|s| s.stored_id == sid).cloned() {
+        return Some(found);
+    }
+    drop(registry);
+    // Not a gateway-native session: is it one of the Python backend's
+    // `state.db` chats? Materialize it read-only — the db history replays
+    // into memory and new turns persist to the gateway's own JSONL store.
+    let db = super::state_store::open_if_present(inner.state_db.as_ref()?)?;
+    let row = db.find_session_row(sid)?;
+    let mut session = Session::with_stored(
+        row["cwd"].as_str().unwrap_or("."),
+        sid,
+        inner.store_dir.as_deref(),
+    );
+    if let Some(title) = row["title"].as_str() {
+        *session.title.lock().unwrap() = title.to_string();
+    }
+    if let Some(cwd) = row["cwd"].as_str() {
+        *session.cwd.lock().unwrap() = cwd.to_string();
+    }
+    for (role, text) in db.history(sid).unwrap_or_default() {
+        let role = if role == "assistant" {
+            hermes_core::Role::Assistant
+        } else {
+            hermes_core::Role::User
+        };
+        session.history.lock().unwrap().push(hermes_core::Message::text(role, &text));
+    }
+    let session = Arc::new(session);
+    inner
+        .registry
+        .lock()
+        .unwrap()
+        .insert(sid.to_string(), Arc::clone(&session));
+    Some(session)
 }
 
 async fn create<T, H>(

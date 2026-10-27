@@ -12,6 +12,7 @@ hermes-skills = { path = "../skills" }
 hermes-mcp = { path = "../mcp" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rusqlite = { version = "0.41.0", features = ["bundled"] }
 tokio = { workspace = true, features = ["net", "sync", "time", "macros", "rt-multi-thread", "process"] }
 anyhow = { workspace = true }
 futures = { workspace = true }

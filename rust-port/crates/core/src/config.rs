@@ -132,6 +132,17 @@ impl ProviderConfig {
         }
     }
 
+    /// Same document as JSON (YAML mapping keys become JSON strings), so
+    /// consumers without a serde_yaml dependency can serve `/api/config`.
+    pub fn load_document_json(path: &std::path::Path) -> Result<Option<serde_json::Value>> {
+        match Self::load_document(path)? {
+            Some(doc) => Ok(Some(
+                serde_json::to_value(&doc).with_context(|| "converting config.yaml to JSON".to_string())?,
+            )),
+            None => Ok(None),
+        }
+    }
+
     /// Parse the user's config.yaml.
     pub fn load(path: &std::path::Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
