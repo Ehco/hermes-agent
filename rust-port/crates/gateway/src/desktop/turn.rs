@@ -20,26 +20,45 @@ use hermes_core::transport::{StreamItem, Transport};
 
 use super::{emit_event, new_id, DesktopApi, PendingPrompt, PromptKind, Session};
 
-/// Spawn the (queued) turn loop for one submitted prompt. Returns the admission
-/// receipt the `prompt.submit` RPC answers with
-/// (`{status: "streaming"|"queued", admission_id}`).
+/// Spawn the (queued) turn loop for one submitted prompt. Returns the canonical
+/// admission receipt the `prompt.submit` RPC answers with
+/// (`session_contract.AdmissionReceipt`: `ref`-nested session id).
 pub fn submit<T, H>(api: &DesktopApi<T, H>, session: &Arc<Session>, text: &str) -> Value
 where
     T: Transport + Send + Sync + 'static,
     H: ToolHost + Send + Sync + 'static,
 {
     let admission = new_id("adm");
+    let admission_id = admission.clone();
+    // Canonical admission receipt (`session_contract.AdmissionReceipt`):
+    // `{admission_id, ref: {profile_id, session_id}, sequence, status,
+    // outcome, authority_epoch, execution_generation}`. The desktop client
+    // validates `ref.session_id` against the submitted session — the old flat
+    // `{status, admission_id, session_id}` shape made it throw
+    // 'Canonical admission receipt destination mismatch'.
+    let receipt = |status: &str, generation: Option<u64>| -> Value {
+        json!({
+            "admission_id": admission_id.clone(),
+            "ref": { "profile_id": "default", "session_id": session.id },
+            "sequence": session.seq.load(Ordering::Relaxed),
+            "status": status,
+            "outcome": null,
+            "authority_epoch": 1,
+            "execution_generation": generation,
+        })
+    };
     if session.running.load(Ordering::Relaxed) {
         session
             .queue
             .lock()
             .unwrap()
             .push((text.to_string(), admission.clone()));
-        return json!({ "status": "queued", "admission_id": admission, "session_id": session.id });
+        let r = receipt("queued", None);
+        return r;
     }
-    let admission2 = admission.clone();
+    let receipt2 = receipt;
     spawn_turn(api, session.clone(), text.to_string(), admission);
-    json!({ "status": "streaming", "admission_id": admission2, "session_id": session.id })
+    receipt2("started", None)
 }
 
 fn spawn_turn<T, H>(api: &DesktopApi<T, H>, session: Arc<Session>, text: String, admission: String)

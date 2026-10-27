@@ -133,8 +133,10 @@ fn profile_home(args: &Args) -> PathBuf {
     let root = args.home.clone().unwrap_or_else(default_home);
     match args.profile.as_deref() {
         None => root,
-        // A bare name is a profile under the root; anything with a separator
-        // (or an absolute path) is the home itself.
+        // Python `resolve_profile_env`: the *default* profile IS the home
+        // root (config.yaml at $HERMES_HOME), named profiles live under
+        // profiles/<name>. A path is used as-is.
+        Some("default") => root,
         Some(name) if is_bare_profile_name(name) => root.join("profiles").join(name),
         Some(path) => PathBuf::from(path),
     }
@@ -217,13 +219,20 @@ fn serve_owner(args: &Args) -> Result<()> {
     let port = args.port.unwrap_or(0);
     let home = profile_home(args);
 
-    let cfg = ProviderConfig::load_default()?;
+    // The profile's own config.yaml (the Python strict profile scope);
+    // fall back to the default path when the profile has none.
+    let profile_config = home.join("config.yaml");
+    let cfg = if profile_config.exists() {
+        ProviderConfig::load(&profile_config)?
+    } else {
+        ProviderConfig::load_default()?
+    };
     let transport = match cfg.kind {
         ProviderKind::ChatCompletions => AnyTransport::ChatCompletions(
-            hermes_core::transports::chat_completions::ChatCompletionsTransport::new(cfg),
+            hermes_core::transports::chat_completions::ChatCompletionsTransport::new(cfg.clone()),
         ),
         ProviderKind::Anthropic => AnyTransport::Anthropic(
-            hermes_core::transports::anthropic::AnthropicTransport::new(cfg),
+            hermes_core::transports::anthropic::AnthropicTransport::new(cfg.clone()),
         ),
     };
 
@@ -233,7 +242,10 @@ fn serve_owner(args: &Args) -> Result<()> {
     )
     // Sessions persist as JSONL under the profile home and are restored on
     // owner start, so the sidebar survives owner restarts.
-    .with_store_dir(home.join("sessions"));
+    .with_store_dir(home.join("sessions"))
+    // The setup readiness RPCs read the same provider config the
+    // transport was built from (Python `session_readiness`).
+    .with_provider(cfg);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

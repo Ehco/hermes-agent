@@ -175,17 +175,30 @@ async fn ready_snapshot_ping_and_turn_stream() {
     let pong = request(&mut ws, 2, "gateway.ping", json!({})).await;
     assert_eq!(pong, json!({ "ok": true }));
 
+    // Setup readiness: both probes answer even without a configured provider
+    // (the client's onboarding overlay holds until `configured` is a bool).
+    let status = request(&mut ws, 3, "setup.status", json!({})).await;
+    assert_eq!(status["provider_configured"], false);
+    let check = request(&mut ws, 4, "setup.runtime_check", json!({})).await;
+    assert_eq!(check["ok"], false);
+    assert!(check["error"].is_string());
+    assert!(check["provider"].is_string());
+
     // prompt.submit → the turn streams as events, bracketed by
-    // session.updated {running} and closed by message.complete.
+    // session.updated {running} and closed by message.complete. The receipt is
+    // the canonical AdmissionReceipt: the client validates ref.session_id.
     let receipt = request(
         &mut ws,
-        3,
+        5,
         "prompt.submit",
         json!({ "session_id": snap["session_id"], "text": "hi" }),
     )
     .await;
-    assert_eq!(receipt["status"], "streaming");
+    assert_eq!(receipt["status"], "started");
     assert!(receipt["admission_id"].is_string());
+    assert_eq!(receipt["ref"]["session_id"], snap["session_id"]);
+    assert_eq!(receipt["ref"]["profile_id"], "default");
+    assert_eq!(receipt["authority_epoch"], 1);
 
     let mut deltas = Vec::new();
     let mut completed = None;

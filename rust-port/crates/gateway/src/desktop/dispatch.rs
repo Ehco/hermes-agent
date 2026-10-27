@@ -40,6 +40,8 @@ where
         "clarify.respond" => Some(respond(api, id, params, false)),
         "session.events.since" => Some(events_since(api, id, &params)),
         "gateway.status" => Some(gateway_status(api, id)),
+        "setup.status" => Some(setup_status(api, id)),
+        "setup.runtime_check" => Some(setup_runtime_check(api, id, &params)),
         _ => Some(super::jsonrpc::error(
             id,
             super::jsonrpc::METHOD_NOT_FOUND,
@@ -461,6 +463,72 @@ where
             "snapshot_required": snapshot_required,
             "count": events.len(),
             "open_requests": open_requests,
+        }),
+    )
+}
+
+/// `setup.status` (Python `session_readiness.readiness(runtime=False)`):
+/// whether the profile's provider config carries usable credentials. The
+/// desktop onboarding overlay holds while this is unknown/false.
+fn setup_status<T, H>(api: &DesktopApi<T, H>, id: Value) -> Value
+where
+    T: Transport,
+    H: ToolHost,
+{
+    let configured = api
+        .inner
+        .provider
+        .as_ref()
+        .map(|p| p.resolve_api_key().is_ok())
+        .unwrap_or(false);
+    super::jsonrpc::response(id, json!({ "provider_configured": configured }))
+}
+
+/// `setup.runtime_check` (Python `readiness(runtime=True)` →
+/// `check_runtime_readiness`): resolve the route a session would build with —
+/// `{ok: true, provider, model, free_tier_route}` or `{ok: false, …, error}`
+/// naming the pinned provider, exactly the legacy payload the desktop client
+/// keys `configured` on. A requested provider is a strict single-provider
+/// check (onboarding verifying the provider it just connected).
+fn setup_runtime_check<T, H>(
+    api: &DesktopApi<T, H>,
+    id: Value,
+    params: &serde_json::Map<String, Value>,
+) -> Value
+where
+    T: Transport,
+    H: ToolHost,
+{
+    let requested = params.get("provider").and_then(Value::as_str).map(str::to_string);
+    let Some(cfg) = api.inner.provider.as_ref() else {
+        let provider = requested.unwrap_or_else(|| "provider".into());
+        return super::jsonrpc::response(
+            id,
+            json!({
+                "ok": false, "provider": provider, "model": null,
+                "error": "No Hermes provider is configured.",
+            }),
+        );
+    };
+    let model = (!cfg.model.is_empty()).then(|| cfg.model.clone());
+    let matches = match (&requested, &cfg.name) {
+        (Some(req), Some(actual)) => req == actual,
+        _ => true,
+    };
+    let named = requested.or_else(|| cfg.name.clone()).unwrap_or_else(|| "provider".into());
+    if matches && cfg.resolve_api_key().is_ok() {
+        return super::jsonrpc::response(
+            id,
+            json!({
+                "ok": true, "provider": cfg.name, "model": model, "free_tier_route": false,
+            }),
+        );
+    }
+    super::jsonrpc::response(
+        id,
+        json!({
+            "ok": false, "provider": named, "model": model,
+            "error": format!("No usable credentials found for {named}."),
         }),
     )
 }

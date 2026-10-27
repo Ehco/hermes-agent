@@ -501,6 +501,9 @@ pub struct DesktopInner {
     pub store_dir: Option<PathBuf>,
     /// Optional skills root (`discover_skills`).
     pub skills_root: Mutex<Option<PathBuf>>,
+    /// The profile's provider configuration — `setup.status` /
+    /// `setup.runtime_check` read it (Python `session_readiness`).
+    pub provider: Option<hermes_core::config::ProviderConfig>,
     /// Skill enable-state (the /api/skills toggle); absent = enabled.
     pub skills_disabled: Mutex<std::collections::HashSet<String>>,
     /// MCP server configs (name → enabled + launch spec) for /api/mcp.
@@ -550,6 +553,7 @@ impl Clone for DesktopInner {
             token: self.token.clone(),
             store_dir: self.store_dir.clone(),
             skills_root: Mutex::new(self.skills_root.lock().unwrap().clone()),
+            provider: self.provider.clone(),
             skills_disabled: Mutex::new(self.skills_disabled.lock().unwrap().clone()),
             mcp_servers: Mutex::new(self.mcp_servers.lock().unwrap().clone()),
             started_at: self.started_at,
@@ -595,6 +599,7 @@ where
                 token: None,
                 store_dir: None,
                 skills_root: Mutex::new(None),
+                provider: None,
                 skills_disabled: Mutex::new(std::collections::HashSet::new()),
                 mcp_servers: Mutex::new(Vec::new()),
                 started_at: Instant::now(),
@@ -641,6 +646,17 @@ where
     pub fn with_mcp_servers(self, servers: Vec<Value>) -> Self {
         let inner = (*self.inner).clone();
         *inner.mcp_servers.lock().unwrap() = servers;
+        Self {
+            inner: Arc::new(inner),
+            ..self
+        }
+    }
+
+    /// Configure the profile's provider configuration for the setup
+    /// readiness RPCs (`setup.status` / `setup.runtime_check`).
+    pub fn with_provider(self, provider: hermes_core::config::ProviderConfig) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.provider = Some(provider);
         Self {
             inner: Arc::new(inner),
             ..self

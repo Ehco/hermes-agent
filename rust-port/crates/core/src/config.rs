@@ -45,15 +45,30 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
     pub model: String,
     pub kind: ProviderKind,
+    /// The configured `model.provider` name ("custom", "openrouter", …) —
+    /// Python `runtime.get('provider')` in the readiness payload.
+    pub name: Option<String>,
 }
 
 impl ProviderConfig {
     pub fn new(kind: ProviderKind) -> Self {
         let (base_url, api_key_env) = match kind {
-            ProviderKind::ChatCompletions => ("https://api.openai.com/v1".into(), "OPENAI_API_KEY".into()),
-            ProviderKind::Anthropic => ("https://api.anthropic.com".into(), "ANTHROPIC_API_KEY".into()),
+            ProviderKind::ChatCompletions => {
+                ("https://api.openai.com/v1".into(), "OPENAI_API_KEY".into())
+            }
+            ProviderKind::Anthropic => (
+                "https://api.anthropic.com".into(),
+                "ANTHROPIC_API_KEY".into(),
+            ),
         };
-        Self { base_url, api_key_env, api_key: None, model: String::new(), kind }
+        Self {
+            base_url,
+            api_key_env,
+            api_key: None,
+            model: String::new(),
+            kind,
+            name: None,
+        }
     }
 
     /// API key for requests: the configured env var first, then the inline
@@ -78,7 +93,9 @@ impl ProviderConfig {
     /// Build the transport for this provider.
     pub fn build_transport(&self) -> Result<Box<dyn Transport>> {
         match self.kind {
-            ProviderKind::ChatCompletions => Ok(Box::new(ChatCompletionsTransport::new(self.clone()))),
+            ProviderKind::ChatCompletions => {
+                Ok(Box::new(ChatCompletionsTransport::new(self.clone())))
+            }
             ProviderKind::Anthropic => Ok(Box::new(AnthropicTransport::new(self.clone()))),
         }
     }
@@ -111,11 +128,14 @@ impl ProviderConfig {
     }
 
     pub fn from_yaml_str(text: &str) -> Result<Self> {
-        let file: ConfigFile = serde_yaml::from_str(text)
-            .with_context(|| "parsing config.yaml".to_string())?;
+        let file: ConfigFile =
+            serde_yaml::from_str(text).with_context(|| "parsing config.yaml".to_string())?;
         let model = file.model.unwrap_or_default();
 
-        let provider_name = model.provider.unwrap_or_else(|| "auto".into()).to_lowercase();
+        let provider_name = model
+            .provider
+            .unwrap_or_else(|| "auto".into())
+            .to_lowercase();
         let mut cfg = Self::new(ProviderKind::ChatCompletions);
 
         // Built-in provider names select the wire directly.
@@ -134,10 +154,18 @@ impl ProviderConfig {
         }
 
         // Top-level `model:` keys override the named-provider defaults.
-        if let Some(base) = model.base_url { cfg.base_url = base; }
-        if let Some(key) = model.api_key { cfg.api_key = Some(key); }
-        if let Some(env_name) = model.api_key_env { cfg.api_key_env = env_name; }
-        if let Some(m) = model.default.or(model.model) { cfg.model = m; }
+        if let Some(base) = model.base_url {
+            cfg.base_url = base;
+        }
+        if let Some(key) = model.api_key {
+            cfg.api_key = Some(key);
+        }
+        if let Some(env_name) = model.api_key_env {
+            cfg.api_key_env = env_name;
+        }
+        if let Some(m) = model.default.or(model.model) {
+            cfg.model = m;
+        }
         if let Some(mode) = model.api_mode {
             cfg.kind = ProviderKind::from_api_mode(&mode);
         }
@@ -145,6 +173,7 @@ impl ProviderConfig {
         if cfg.model.is_empty() {
             cfg.model = env::var("HERMES_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into());
         }
+        cfg.name = Some(provider_name.clone());
         Ok(cfg)
     }
 }
@@ -190,12 +219,18 @@ struct ProviderEntry {
 
 impl ProviderEntry {
     fn apply(&self, cfg: &mut ProviderConfig) {
-        if let Some(base) = &self.base_url { cfg.base_url = base.clone(); }
-        if let Some(key) = &self.api_key { cfg.api_key = Some(key.clone()); }
+        if let Some(base) = &self.base_url {
+            cfg.base_url = base.clone();
+        }
+        if let Some(key) = &self.api_key {
+            cfg.api_key = Some(key.clone());
+        }
         if let Some(env_name) = self.key_env.as_ref().or(self.api_key_env.as_ref()) {
             cfg.api_key_env = env_name.clone();
         }
-        if let Some(m) = &self.model { cfg.model = m.clone(); }
+        if let Some(m) = &self.model {
+            cfg.model = m.clone();
+        }
     }
 }
 
