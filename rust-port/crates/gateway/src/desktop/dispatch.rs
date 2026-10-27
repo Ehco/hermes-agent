@@ -42,6 +42,11 @@ where
         "gateway.status" => Some(gateway_status(api, id)),
         "setup.status" => Some(setup_status(api, id)),
         "setup.runtime_check" => Some(setup_runtime_check(api, id, &params)),
+        // The newer sidebar drills into projects via this RPC; the full
+        // repo→lane→sessions tree is a later port. `{project: null}` is the
+        // contract's own "nothing here" — the client falls back to its
+        // overview node instead of showing a load failure.
+        "projects.project_sessions" => Some(super::jsonrpc::response(id, json!({ "project": null }))),
         _ => Some(super::jsonrpc::error(
             id,
             super::jsonrpc::METHOD_NOT_FOUND,

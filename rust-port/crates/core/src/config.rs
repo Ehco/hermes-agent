@@ -120,6 +120,18 @@ impl ProviderConfig {
         }
     }
 
+    /// The raw config document (mcp_servers, agents, … beyond the provider
+    /// scope). `Ok(None)` when the file is missing.
+    pub fn load_document(path: &std::path::Path) -> Result<Option<serde_yaml::Value>> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => Ok(Some(
+                serde_yaml::from_str(&text).with_context(|| "parsing config.yaml".to_string())?,
+            )),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(anyhow!(e).context(format!("reading config {}", path.display()))),
+        }
+    }
+
     /// Parse the user's config.yaml.
     pub fn load(path: &std::path::Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)

@@ -245,7 +245,11 @@ fn serve_owner(args: &Args) -> Result<()> {
     .with_store_dir(home.join("sessions"))
     // The setup readiness RPCs read the same provider config the
     // transport was built from (Python `session_readiness`).
-    .with_provider(cfg);
+    .with_provider(cfg)
+    // Skills/MCP read the profile's real dirs/config: the desktop's
+    // Capabilities view lists the same servers the Python app does.
+    .with_skills_root(home.join("skills"))
+    .with_mcp_servers(mcp_servers_from_config(&home));
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -471,4 +475,41 @@ mod tests {
         };
         assert_eq!(profile_home(&args), PathBuf::from("/h"));
     }
+}
+
+/// config.yaml `mcp_servers:` → the desktop's /api/mcp/servers entries
+/// (`{name, enabled, transport: "stdio", command, args}`), the same records
+/// the Python webapp serves from the profile config.
+fn mcp_servers_from_config(home: &std::path::Path) -> Vec<serde_json::Value> {
+    let Some(doc) =
+        ProviderConfig::load_document(&home.join("config.yaml")).ok().flatten()
+    else {
+        return Vec::new();
+    };
+    let Some(servers) = doc.get("mcp_servers").and_then(|m| m.as_mapping()) else {
+        return Vec::new();
+    };
+    servers
+        .iter()
+        .filter_map(|(key, spec)| {
+            let name = key.as_str()?.to_string();
+            let command = spec.get("command")?.as_str()?.to_string();
+            let args: Vec<String> = spec
+                .get("args")
+                .and_then(|a| a.as_sequence())
+                .map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let enabled = spec.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true);
+            Some(
+                serde_json::json!({
+                    "name": name, "enabled": enabled,
+                    "transport": "stdio", "command": command, "args": args,
+                }),
+            )
+        })
+        .collect()
 }
